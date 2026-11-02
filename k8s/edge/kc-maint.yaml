@@ -1,0 +1,48 @@
+# Backend for frozen paths (Ingress kc-freeze): 503 + Retry-After, so clients back off instead of writing to a color
+# whose writes would be lost. Only admin + account console are frozen during a lossy window; login/token stay up.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kc-maint
+  namespace: keycloak
+data:
+  default.conf: |
+    server {
+      listen 8080 default_server;
+      add_header Retry-After 5 always;
+      default_type text/plain;
+      location / { return 503 "maintenance: this path is frozen during a Keycloak upgrade, retry shortly\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kc-maint
+  namespace: keycloak
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: kc-maint }
+  template:
+    metadata:
+      labels: { app: kc-maint }
+    spec:
+      containers:
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:1.31.7-alpine
+          ports: [{ name: http, containerPort: 8080 }]
+          volumeMounts: [{ name: conf, mountPath: /etc/nginx/conf.d }]
+          readinessProbe: { tcpSocket: { port: http }, periodSeconds: 5 }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+      volumes: [{ name: conf, configMap: { name: kc-maint } }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kc-maint
+  namespace: keycloak
+spec:
+  selector: { app: kc-maint }
+  ports: [{ name: http, port: 80, targetPort: http }]

@@ -90,9 +90,14 @@ cli_tag() { case $1 in 25.*) echo 6.5.1-25 ;; 26.*) echo 6.5.1-26.5.5 ;; *) die 
 # control-plane node, TLS verified against the demo CA), authenticated as the config-cli service account.
 admin_api() {
   local method=$1 path=$2; shift 2
-  [[ -n ${CA_FILE:-} ]] || ca_file >/dev/null
-  local ip; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
-  local base=https://kc-net1.localtest.me/keycloak c=(curl -sf --cacert "$CA_FILE" --resolve "kc-net1.localtest.me:443:$ip")
+  local base c
+  if [[ -n ${ADMIN_BASE:-} ]]; then # admin_direct_start: one color via port-forward
+    base=$ADMIN_BASE c=(curl -sf)
+  else
+    [[ -n ${CA_FILE:-} ]] || ca_file >/dev/null
+    local ip; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
+    base=https://kc-net1.localtest.me/keycloak c=(curl -sf --cacert "$CA_FILE" --resolve "kc-net1.localtest.me:443:$ip")
+  fi
   if [[ -z ${ADMIN_TOKEN:-} ]]; then
     ADMIN_TOKEN=$("${c[@]}" -d grant_type=client_credentials -d client_id=config-cli \
       --data-urlencode "client_secret=$(kubectl -n "$NS" get secret kc-config-cli -o jsonpath='{.data.secret}' | base64 -d)" \
@@ -120,3 +125,34 @@ first_install() {
   local stage; for stage in bootstrap online maintenance; do scripts/config.sh "$stage" blue; done
   scripts/seed-users.sh 4000
 }
+
+# freeze <path...>: send these Prefix paths (both hosts) to kc-maint (503 + Retry-After). unfreeze: remove.
+freeze() {
+  local paths; paths=$(printf '%s\n' "$@" | jq -R '{path: ., pathType: "Prefix",
+    backend: {service: {name: "kc-maint", port: {name: "http"}}}}' | jq -sc .)
+  kubectl apply -f k8s/edge/kc-maint.yaml >/dev/null
+  kubectl -n "$NS" rollout status deploy/kc-maint --timeout=120s >/dev/null
+  # shellcheck disable=SC2016 # envsubst's variable list, not an expansion
+  PATHS=$paths envsubst '$PATHS' < k8s/edge/kc-freeze.yaml.tpl | kubectl apply -f - >/dev/null
+  log "frozen: $*"
+}
+unfreeze() { kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null; log "unfrozen"; }
+
+# psql_db <db-cluster> <sql> [database]: run SQL on the cluster's current primary as postgres
+psql_db() {
+  local pod; pod=$(kubectl -n "$NS" get cluster.postgresql.cnpg.io "$1" -o jsonpath='{.status.currentPrimary}')
+  kubectl -n "$NS" exec "$pod" -c postgres -- psql -U postgres -d "${3:-postgres}" -Atc "$2"
+}
+
+# admin_direct_start <color> / admin_direct_stop: like admin_api, but straight to one color's Service via a
+# port-forward (kubelet path, not subject to the NetworkPolicy). Needed before a switch, when ingress still points at
+# the other color. Sets ADMIN_BASE; admin_api uses it when set.
+admin_direct_start() {
+  local port=$((20000 + RANDOM % 10000))
+  kubectl -n "$NS" port-forward "svc/kc-$1-keycloak" "$port:80" >/dev/null 2>&1 &
+  ADMIN_PF=$!
+  ADMIN_BASE=http://127.0.0.1:$port/keycloak ADMIN_TOKEN=
+  local _; for _ in $(seq 30); do curl -sf "$ADMIN_BASE/realms/master" >/dev/null && return; sleep 1; done
+  die "port-forward to kc-$1 failed"
+}
+admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE ADMIN_PF; ADMIN_TOKEN=; }
