@@ -8,11 +8,21 @@ Research and decision trail: `C:\dev\_worklogs\keycloak-bluegreen\2026-11-02-res
 | Path | Example in demo | DB | Downtime claim |
 |---|---|---|---|
 | **same-minor** | 26.8.0 -> 26.8.1 patch + provider/theme/config change | one shared CNPG cluster | zero: gate = 0 x 5xx, in-flight logins survive |
-| **minor upgrade** | 26.7.5 -> 26.8.0 | green gets its own CNPG cluster (replica of blue's, promoted) | write-freeze only: login/token/admin -> 503 + Retry-After while green's DB migrates; discovery/JWKS stay up; freeze duration measured + reported |
+| **minor upgrade** | 26.7.5 -> 26.8.0 | green gets its own CNPG cluster (replica of blue's, promoted) | **lossy overlap**: no login/token outage. Blue serves while green's copy migrates. Sessions created on blue in the window are lost, and those users re-login silently via the legacy IdP's SSO. Logouts and first-broker-login user creations from the window are REPLAYED onto green. Only `/admin` + account console get 503. Window length and sessions lost are measured. |
 
 Why there are two paths: Keycloak does not support two different major.minor versions on one DB
 ("Deploying different Keycloak major/minor versions on each of the sites is not supported",
 multi-cluster v2 upgrades doc). A patch upgrade on one shared DB is supported.
+On the minor path a write made on blue after the copy point has to be blocked, lost or replayed.
+Lossy works here because users live in the legacy Spring IdP (Keycloak only brokers; it holds no
+passwords). A lost session costs one silent redirect. Two kinds of lost write are NOT acceptable and are replayed:
+- **logout**: lost logout = the session is resurrected on green and an RP refresh token works again (security)
+- **first-broker-login**: lost user creation = the next login on green creates a NEW user id, so `sub` changes for that person
+
+Strict write-freeze variant (503 on login/token during migration): designed earlier, not built (lossy chosen 2026-11-02).
+
+Users: the legacy IdP has 5k users. Keycloak has users 1-4000 pre-linked (federated identity
+`legacy`); 4001-5000 hit first-broker-login on their first login (exercises the creation-replay path).
 
 Demo narrative (one run of `scripts/demo.sh` = what the README walks through):
 1. bootstrap blue @ 26.7.5 on `pg-1`
@@ -38,8 +48,13 @@ KinD "kc": 1 control-plane + 3 workers (labels topology.kubernetes.io/zone=a|b|c
  │   kc-active     plain Service, selector app.kubernetes.io/instance=<color>  <- THE switch
  │   kc-maint      tiny nginx returning 503 + Retry-After: 5 (freeze backend)
  │   Ingress kc          host kc.localtest.me -> kc-active
- │   Ingress kc-freeze   (only during freeze) exact write paths -> kc-maint
- └─ load ns: k6 Job (hostAliases kc.localtest.me -> ingress-nginx ClusterIP)
+ │   Ingress kc-freeze   (only during a freeze/lossy window) listed Prefix paths -> kc-maint
+ ├─ legacy ns: legacy-idp (Spring Authorization Server, 1 replica, in-memory sessions), https://legacy.localtest.me
+ │             NOT part of blue/green; it is the "outside world" Keycloak brokers to
+ └─ load ns: k6 Job
+CoreDNS rewrite: `*.localtest.me` -> ingress-nginx controller Service. Pods, Keycloak's broker
+back-channel and k6 all use the same public URLs as the host browser. No hostAliases, no internal/external URL split.
+Keycloak trusts the demo CA via the chart's `trustedCertsExistingSecret` (-> `KC_TRUSTSTORE_PATHS`).
 ```
 Jenkins UI: http://localhost:8081 (8080 taken on dev box). Jenkins reaches the API server over the
 docker network `kind` (compose declares it with `name: kind`; kind reuses an existing network of that
@@ -81,7 +96,8 @@ which step 2 would otherwise still be holding for rollback.
 - **bootstrap**: first install only. With the temporary bootstrap admin (`KC_BOOTSTRAP_ADMIN_*`),
   creates master client `config-cli` (client_credentials, realm `admin` role) and the empty `demo`
   realm. The Job no-ops if realm `demo` exists. Later stages authenticate as `config-cli`.
-- **online**: backward-compatible, applied while traffic flows on the shared DB: clients, client
+- **online**: backward-compatible, applied while traffic flows on the shared DB: identity provider
+  `legacy` (OIDC, client `keycloak-broker`, sync mode FORCE, mappers `tenant` attr), clients, client
   scopes (`tenant`), mappers, roles, groups, theme selection, event listeners, additive flows.
 - **maintenance**: breaking changes (rebind browser flow, delete/rename clients or scopes).
   On the minor path it runs against green's DB during the freeze, which costs no extra downtime.
@@ -90,9 +106,9 @@ which step 2 would otherwise still be holding for rollback.
 - Settings for all stages: `import.remote-state.enabled=true`, `import.var-substitution.enabled=true`
   (client secrets from env), `import.validate=true`. Keep `import.managed.*` at the defaults except
   `no-delete` in online (online must never delete).
-- Users are test data, not config: 5k users are seeded by `scripts/seed-users.sh` via admin
-  `partialImport`, not by config-cli. Hash the password ONCE and pass the same
-  `credentialData`/`secretData` for every user (5k plaintext passwords = 5k argon2 hashes = minutes of CPU).
+- Users are test data, not config. `scripts/seed-users.sh` pre-links users 1-4000 via admin
+  `partialImport` (`federatedIdentities: [{identityProvider: legacy, userId: <legacy sub>, userName}]`,
+  no credentials), not via config-cli.
 - The bootstrap realm sets `ssoSessionIdleTimeout`/`ssoSessionMaxLifespan` long enough (2h/10h) for the
   first-login refresh token to survive the whole demo.
 
@@ -102,7 +118,13 @@ which step 2 would otherwise still be holding for rollback.
 - `LoginContextAuthenticator`: no-UI authenticator in custom flow `browser-demo`. Sets auth note
   `login_ctx=<provider version>`. `LoginContextMapper` copies it to claim `login_ctx`. The claim
   proves which provider version handled the login (v1 -> v2 across same-minor).
-- `LogoutAuditListener`: event listener, logs `LOGOUT`/`LOGOUT_ERROR` as one JSON line.
+- `ReplayEventListener`: event listener. For each `LOGOUT` and first-broker-login user creation
+  (`IDENTITY_PROVIDER_FIRST_LOGIN` / `REGISTER` with `identity_provider` detail; verify the exact event
+  types on 26.7.5 in Slice 3), it writes ONE JSON line to stdout tagged `"replay":true`: `type, time,
+  realmId, sessionId, userId`. For creations it also writes `username, email, attributes,
+  federatedIdentities`, loaded via the KeycloakSession. Token revocation (`/revoke`): check which event it
+  emits; if one exists, replay it as a session delete (conservative superset).
+  This is the minor-path replay source.
 - `themes/demo`: login theme (`login.ftl`, `logout-confirm.ftl` overrides, CSS) with a visible version
   marker `data-theme-version`.
 
@@ -144,6 +166,22 @@ which step 2 would otherwise still be holding for rollback.
 - **Don't touch**: providers/, config/, load/
 - **Depends on**: none
 
+## Slice 1b: legacy IdP (Spring Authorization Server)
+- **Files**: create `legacy-idp/pom.xml`, `legacy-idp/src/main/java/demo/legacy/{LegacyIdpApplication,SecurityConfig,Users}.java`,
+  `legacy-idp/src/main/resources/application.yaml`, `legacy-idp/src/test/java/demo/legacy/*Test.java`,
+  `images/legacy-idp/Dockerfile`, `k8s/legacy/{deployment.yaml,ingress.yaml}`; edit `scripts/up.sh` (build, load, apply)
+- **Contract**: issuer `https://legacy.localtest.me`. Users `user0001`..`user5000`, password from env
+  `LEGACY_USER_PASSWORD`, encoded ONCE at startup and shared by all users. Claim `sub` = username,
+  attribute claim `tenant` = `t<n % 10>`. Registered client `keycloak-broker` (confidential, auth code + PKCE,
+  redirect `https://kc.localtest.me/realms/demo/broker/legacy/endpoint`). Form login, SSO session 8h.
+  Use the latest Spring Boot / Spring Authorization Server line; check versions at build.
+  Example: `curl https://legacy.localtest.me/.well-known/openid-configuration` -> `"issuer":"https://legacy.localtest.me"`.
+- **Tests**: Spring Boot test: auth-code flow for `user0042` yields an id_token with `sub=user0042` and `tenant=t2`.
+- **Regression scope**: none (pure create)
+- **Done**: tests green; discovery reachable from host and from a pod (CoreDNS rewrite works).
+- **Don't touch**: keycloak image, config/
+- **Depends on**: 1
+
 ## Slice 2: config-cli stages + seeded users
 - **Files**: create `config/bootstrap/00-master-config-cli.yaml`, `config/bootstrap/10-demo-realm.yaml`,
   `config/online/*.yaml` (client `k6-app` confidential + redirect `https://app.localtest.me/cb`,
@@ -156,22 +194,27 @@ which step 2 would otherwise still be holding for rollback.
     leaf key/value in `config/<stage>/*.yaml` appears in the export (jq). This is the dropped-field check.
   - Example: `config.sh online blue && check-config.sh online` -> exit 0. Corrupting a value in the export -> exit 1, naming the path.
 - **Tests**: re-running every stage twice is a no-op (second run's admin-event count = 0).
-  `seed-users.sh 5000` -> `GET /admin/realms/demo/users/count` = 5000, each user with attribute `tenant`.
+  `seed-users.sh 4000` -> `GET /admin/realms/demo/users/count` = 4000, each linked to `legacy`.
+  A browser login as `user0042` via `kc_idp_hint=legacy` lands without first-broker-login; `user4500` goes through it.
 - **Regression scope**: Slice 1 check-cluster
 - **Done**: bootstrap -> online -> maintenance on blue, all checks green; the bootstrap admin is no longer needed by later stages.
 - **Don't touch**: providers/, images/
-- **Depends on**: 1
+- **Depends on**: 1, 1b
 
 ## Slice 3: provider JAR + theme
 - **Files**: create `providers/pom.xml`, `providers/src/main/java/demo/kc/{TenantMapper,LoginContextAuthenticator,
-  LoginContextAuthenticatorFactory,LoginContextMapper,LogoutAuditListener,LogoutAuditListenerFactory}.java`,
+  LoginContextAuthenticatorFactory,LoginContextMapper,ReplayEventListener,ReplayEventListenerFactory}.java`,
   `providers/src/main/resources/META-INF/services/*`, `providers/src/test/java/demo/kc/*Test.java`,
-  `themes/demo/login/{theme.properties,login.ftl,logout-confirm.ftl,resources/css/demo.css}`. Edit `images/keycloak/Dockerfile` (COPY jar + theme before `kc.sh build`).
+  `themes/demo/login/{theme.properties,login.ftl,logout-confirm.ftl,error.ftl,resources/css/demo.css}`. Edit `images/keycloak/Dockerfile` (COPY jar + theme before `kc.sh build`).
 - **Contract**: `PROVIDER_VERSION` (maven property, default `1`) is baked into the authenticator's note value.
-  Example: login through flow `browser-demo` with provider v1 -> access token has `"login_ctx":"v1"` and
-  `"tenant":"<user attr>"` (when scope `tenant` is requested).
+  Flows (config lives in Slice 2): `browser-demo` = cookie -> identity-provider-redirector (default `legacy`);
+  `post-broker-demo` = `LoginContextAuthenticator` (the IdP's post-broker-login flow). The authenticator
+  sets USER SESSION note `login_ctx=v<PROVIDER_VERSION>` (survives refresh); `LoginContextMapper` emits it.
+  Example: a broker login with provider v1 -> the access token has `"login_ctx":"v1"` and `"tenant":"t2"` for
+  `user0042` (when scope `tenant` is requested).
 - **Tests** (JUnit, public behaviour only): mapper with attribute `tenant=acme` -> claim `acme`; no attribute -> no claim.
-  Listener formats a LOGOUT event into exactly one JSON line with `type,realmId,userId,sessionId`.
+  The listener turns a LOGOUT event into exactly one JSON line with `replay:true,type,time,realmId,userId,sessionId`;
+  a non-replayed event type (e.g. `CODE_TO_TOKEN`) -> no line.
 - **Regression scope**: none (pure create); the image rebuild must keep Slice 1's check green.
 - **Done**: `mvn verify` green. An image with the jar boots; the claims appear in a manual auth-code login.
 - **Don't touch**: config/ (Slice 2 owns it; Slice 3 only names `browser-demo`, `tenant`, `demo` to match)
@@ -181,16 +224,34 @@ which step 2 would otherwise still be holding for rollback.
 - **Files**: create `load/k6/flows.js`, `k8s/k6-job.yaml.tpl`, `scripts/load.sh`, `scripts/gate.sh`
 - **Contract**:
   - k6 scenarios (constant arrival rate, 10 min max, stopped by `load.sh stop`):
-    - `login`: full auth-code flow. GET `/auth`, parse the form (`k6/html`), think time 0-20 s, POST the credentials, take the code from `Location` (redirects: 0), POST `/token`.
-    - `refresh`: hold a refresh token, refresh every 5 s.
-    - `logout`: RP-initiated logout with `id_token_hint`.
+    - `login`: full brokered auth-code flow with manual redirects (redirects: 0), each hop logged:
+      1. KC `/auth`
+      2. legacy `/oauth2/authorize`
+      3. legacy login form: GET, think time 0-20 s, POST
+      4. KC `/broker/legacy/endpoint`
+      5. first-broker-login form if any (auto-submit with the profile prefilled)
+      6. `Location` code
+      7. KC `/token`
+
+      80% of logins use users 1-4000 (linked), 20% use 4001-5000 (new on first login). Each VU keeps
+      its cookie jar, so a re-login after a lost session is silent via the legacy SSO (counted as `relogin`).
+    - `refresh`: hold a refresh token, refresh every 5 s. On `invalid_grant`, do a silent re-login and count it.
+    - `logout`: RP-initiated logout with `id_token_hint`. KEEP that session's refresh token and probe it every 5 s for the rest of the run (`logout_probe`).
     - `reads`: discovery + JWKS every 1 s.
-  - Each request logs one JSON line: `{t_start,t_end,scenario,step,status,login_id,claims:{login_ctx,tenant}}`.
+  - Each request logs one JSON line: `{t_start,t_end,scenario,step,status,login_id,user,sub,claims:{login_ctx,tenant}}`.
   - `gate.sh <path>` reads the k6 lines + `out/events.jsonl` and prints a table. It exits non-zero on any failed rule:
-    - same-minor: 0 responses >= 500 or status 0; >= 1 login with GET before `switch` and POST after it, all of them succeeded; every refresh token issued before the switch refreshes OK after it; claims all present.
-    - minor: reads show 0 errors over the whole run; 503 appears only in `[freeze_start, freeze_end]` and only on write paths; >= 1 refresh token issued before the freeze refreshes OK after it; prints `freeze_seconds`.
+    - **both paths**: 0 responses >= 500 or status 0 outside the declared 503 paths/window; reads 0 errors; claims present; per `user`, `sub` never changes over the run (catches lost first-broker-login creations).
+    - **same-minor**: >= 1 login with a hop before `switch` and the next hop after it, all succeeded; every refresh token issued before `switch` refreshes OK after it; 0 `invalid_grant` in total.
+    - **minor (lossy)**: refresh tokens issued before `copy_point` refresh OK after `switch`. `invalid_grant` happens only to sessions created in `[copy_point, switch]`, and each of those re-logins OK. After `replay_done`, every `logout_probe` gets `invalid_grant` (logged out stays logged out). 503 only on `/admin` + `/account` in the window. Prints `lossy_seconds`, `sessions_lost`, `relogins`, `logouts_replayed`, `users_replayed`, `resurrection_seconds` (time between `switch` and `replay_done` during which a logged-out session could still refresh on green; reported, not gated).
   - Example: a synthetic file where one 502 lands 2 s after `switch` -> `gate.sh same-minor` exit 1, printing that line.
-- **Tests**: `scripts/test-gate.sh` feeds 4 synthetic fixtures (`load/fixtures/*.jsonl`): pass, 5xx, broken in-flight login, 503 outside the freeze -> expected exits 0,1,1,1.
+- **Tests**: `scripts/test-gate.sh` feeds synthetic fixtures (`load/fixtures/*.jsonl`) -> expected exits:
+  - pass-same-minor -> 0
+  - 5xx -> 1
+  - broken in-flight login -> 1
+  - pass-lossy -> 0
+  - logout probe succeeds after `replay_done` -> 1
+  - `sub` changes for a user -> 1
+  - `invalid_grant` on a pre-copy-point session -> 1
 - **Regression scope**: none
 - **Done**: fixtures green. A 5-minute run against blue with no switch -> `gate.sh same-minor` reports 0 errors (the switch-crossing rule is skipped when there is no `switch` event).
   The load rate is set from this baseline: Keycloak CPU must stay below ~60% of its limit (record rate + CPU in `load/RATE.md`),
@@ -217,33 +278,46 @@ which step 2 would otherwise still be holding for rollback.
 - **Don't touch**: providers/, load/k6 (bugs found there go back to Slice 4)
 - **Depends on**: 4
 
-## Slice 6: minor upgrade (per-color DB, write-freeze)
-- **Files**: create `scripts/switch-minor.sh`, `k8s/postgres/pg-replica.yaml.tpl`, `k8s/edge/{kc-maint.yaml,kc-freeze-ingress.yaml}`; edit `scripts/lib/kc.sh` (`freeze`, `unfreeze`, `wait_replica_caught_up`, `promote_db`)
+## Slice 6: minor upgrade (per-color DB, lossy overlap + replay)
+- **Files**: create `scripts/switch-minor.sh`, `scripts/replay.sh`, `k8s/postgres/pg-replica.yaml.tpl`,
+  `k8s/edge/{kc-maint.yaml,kc-freeze-ingress.yaml.tpl}`; edit `scripts/lib/kc.sh` (`freeze <paths>`,
+  `unfreeze`, `wait_replica_lsn`, `promote_db`)
 - **Contract**: `switch-minor.sh <target_version>`
   1. Create `pg-<n+1>` as a CNPG replica cluster of `activeDb` (streaming) and wait for it to be streaming.
      `externalClusters` must reference the source's `<db>-replication` (client cert) and `<db>-ca`
      secrets. That's the usual first failure; verify it against the CNPG replica-cluster docs.
-  2. Pre-pull and `kind load` the target image (keeps the freeze short).
-  3. `event freeze_start`, then apply `kc-freeze`. Prefix paths for BOTH realms `demo` and `master`:
-     `/realms/<r>/protocol/openid-connect/{auth,token,logout}`, `/realms/<r>/login-actions`,
-     `/realms/<r>/broker`, plus `/admin` -> kc-maint 503.
-  4. `wait_replica_caught_up`: NOT strict LSN equality. Blue keeps writing a little (jdbc-ping
-     heartbeats, background cleanup), so equality is never stable. Sample `pg_current_wal_lsn()` on the
-     primary AFTER the freeze ingress is live, wait until the replica's `pg_last_wal_replay_lsn() >=`
-     that sample, and repeat once more. Writes after the sample are heartbeats/cleanup only (no user writes,
-     the paths are frozen); losing them is fine.
-  5. Promote (`spec.replica.enabled=false`) and wait until the primary is writable.
-  6. Deploy the idle color on the target version against `pg-<n+1>`: 1 replica first, so the migration runs once; then scale to 3.
+  2. Pre-pull and `kind load` the target image (keeps the window short).
+  3. `freeze` the lossy paths only, for both realms `demo` + `master`: `/admin`, `/realms/<r>/account`.
+     Login, token, logout and broker stay up on blue.
+  4. Copy point: sample `pg_current_wal_lsn()` on the primary, `event copy_point`, then wait until the replica's
+     `pg_last_wal_replay_lsn() >=` that sample. Not strict equality: blue keeps writing, so equality is never stable.
+  5. Promote (`spec.replica.enabled=false`) and wait until the primary is writable. From here, blue's writes are lost unless replayed.
+  6. Deploy the idle color on the target version against `pg-<n+1>`: 1 replica first, so the migration runs once
+     (record the `DATABASECHANGELOG` count before/after, event `migration`); then scale to 3.
   7. `config.sh maintenance <idle>` (if any), then smoke internally.
-  8. `set_active <idle>`, then `event switch`, `unfreeze`, `event freeze_end`.
-  9. Keep the old color + old DB for `ROLLBACK_HOLD=10m`. Rollback = `set_active` back, which loses writes made after the freeze (documented).
-- **Tests**: a full 26.7.5 -> 26.8.0 run under load -> `gate.sh minor` exit 0, with `freeze_seconds` printed.
-  Evidence that the migration ran: record the `DATABASECHANGELOG` row count on `pg-<n+1>` before and after
-  green's first pod (event `migration`). If the count does not change, the README must say the mechanism ran
-  with a no-op migration.
-  The image and replica are prepared before the freeze, so the expected freeze is roughly the migration time plus 1-2 pod starts.
+  8. `replay.sh <old> <idle> <copy_point - 5s>` (pass 1).
+  9. `event switch`, then `set_active <idle>`.
+  10. Drain 15 s (in-flight requests on blue finish), then `replay.sh` again with the same start (pass 2) and `event replay_done`.
+  11. `unfreeze`, `event window_end`.
+  12. Keep the old color + old DB for `ROLLBACK_HOLD=10m`, with no traffic. Rollback = `set_active` back, which loses green's writes since `copy_point` (documented).
+- `replay.sh <from> <to> <since>`:
+  - Collect `kubectl logs --since-time` from EVERY `<from>` pod, keeping lines with `"replay":true`. If any `<from>` pod's
+    restartCount changed since `<since>`, fail loudly (its logs are gone).
+  - Apply on `<to>` via its internal Service as the `config-cli` client:
+    - LOGOUT -> `DELETE /admin/realms/demo/sessions/{sessionId}` (404 = fine)
+    - user creation -> `partialImport` `{ifResourceExists: SKIP, users:[{id, username, email, attributes, federatedIdentities, enabled:true}]}`
+  - Idempotent: the window start is set early on purpose, and running it twice is a no-op.
+  - Prints the counts.
+  - Verify early in this slice: `partialImport` keeps the given user `id`. If it does not, the fallback is adding
+    `/realms/demo/login-actions/first-broker-login` to the frozen paths for the window (brand-new users get
+    ~1 min of 503 instead of a changed `sub`).
+- **Tests**: a full 26.7.5 -> 26.8.0 run under load -> `gate.sh minor` exit 0. The run prints `lossy_seconds`,
+  `sessions_lost`, `relogins`, `logouts_replayed`, `users_replayed`, `resurrection_seconds`. If the changelog
+  count does not change, the README says the mechanism ran with a no-op migration.
+  `scripts/test-replay.sh`: feed `replay.sh` a fixture log (2 logouts, 1 creation, 1 duplicate) against a running
+  color -> sessions deleted, user present with the given id, second run changes nothing.
 - **Regression scope**: Slices 1-5
-- **Done**: gate green; sessions created on blue are still valid on green (refresh rule); `kc-state.activeDb=pg-2`.
+- **Done**: gate green; users 4001-5000 that first logged in during the window keep the same `sub` after the switch; `kc-state.activeDb=pg-2`.
 - **Don't touch**: providers/, load/
 - **Depends on**: 5 (shares kc.sh)
 
@@ -267,20 +341,28 @@ which step 2 would otherwise still be holding for rollback.
 - **Depends on**: 7
 
 ## Parallelism
-The live cluster is one shared resource, so every slice that runs the cluster is serial: 1 -> 2 -> 4 -> 5 -> 6 -> 7 -> 8.
-Slice 3's Java + theme work (mvn verify, no cluster) can run in parallel with Slice 2. The Slice 4
+The live cluster is one shared resource, so every slice that runs the cluster is serial: 1 -> 1b -> 2 -> 4 -> 5 -> 6 -> 7 -> 8.
+Slice 3's Java + theme work (mvn verify, no cluster) can run in parallel with Slice 2. Slice 1b's Spring app
+and tests (no cluster) can run in parallel with Slice 1. The Slice 4
 fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's Dockerfile/casc can be drafted in parallel with 5 and 6.
 
 ## Integration tests (owned by no slice; final review writes + runs)
-- Provider v1 on blue, v2 on green, same-minor switch: every login completed after `switch` has `login_ctx=v2`. Logins whose POST lands on green but whose GET was on blue also end with `v2` (the flow continues on green).
+- Provider v1 on blue, v2 on green, same-minor switch: every login whose broker callback lands after `switch` has `login_ctx=v2`. Logins whose KC `/auth` hop was on blue and whose callback hop was on green also end with `v2` (the auth session continues on green).
 - An online config change applied via green is visible on blue within 1 s (stateless invalidation across clusters).
-- After the minor path: `GET /admin/realms/demo/users/count` = 5000 on green (data survived replica + promote + migration).
+- After the minor path: the user count on green = the count on blue at `switch` (copy + replayed creations, nothing lost), and the same ids.
 - The refresh token from the first login of the whole demo (issued on 26.7.5, blue) still refreshes after both switches.
 - `kubectl get pods -A`: no pod of either color has a JGroups view containing the other color.
 
 ## Known limits (state in README, don't build around)
-- Minor/major upgrades are not zero-downtime for writes. The freeze is the migration window.
+- Minor/major upgrades are lossy, not lossless. Sessions created in `[copy_point, switch]` are lost (silent re-login via
+  legacy SSO). Admin and account-console writes are blocked for the window. Only logouts and first-broker-login creations are replayed.
+  Anything else blue writes in the window is dropped by design: IdP-synced attribute updates (re-synced on next login),
+  session last-access/refresh state, brute-force counters, events in the DB event store (the stdout copy remains).
+- Between `switch` and `replay_done` (~drain time), a session logged out on blue in the window can still refresh on green.
+  Measured as `resurrection_seconds`.
+- Lossy only works because Keycloak holds no credentials. A realm with local passwords would lose password changes; use a strict freeze there.
 - `stateless` is a preview feature, and it roughly doubles DB load.
 - Single host: all KinD "zones" are one machine, and clock skew between clusters (stateless needs < 10 s) cannot occur here.
+- Legacy IdP is 1 replica with in-memory sessions (stand-in; it is not what's under test).
 - Writes on the old color after a rollback flip are lost (no reverse replication).
 - No backchannel logout receiver; logout coverage = RP-initiated logout + event listener.
