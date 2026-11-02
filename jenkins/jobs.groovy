@@ -16,3 +16,43 @@ pipelineJob('kc-bluegreen') {
     }
   }
 }
+
+// Proactive security scans, nightly. Logic in scripts/security/, probe list and expectations in security/README.md.
+pipelineJob('kc-kcwarden') {
+  description('kcwarden audit of realms master + demo. Runs scripts/security/kcwarden.sh.')
+  properties {
+    pipelineTriggers { triggers { cron { spec('H 2 * * *') } } }
+  }
+  definition {
+    cpsScm {
+      scm {
+        git {
+          remote { url('file:///repo') }
+          branch('*/main')
+        }
+      }
+      scriptPath('jenkins/kcwarden.Jenkinsfile')
+    }
+  }
+}
+
+pipelineJob('kc-security') {
+  description('Security probes (regression gate). Runs scripts/security/run.sh; see security/README.md.')
+  parameters {
+    stringParam('PROBES', '', 'Space-separated probe names (e.g. "issuer netpol"); blank = all')
+  }
+  properties {
+    pipelineTriggers { triggers { cron { spec('H 2 * * *') } } }
+  }
+  definition {
+    cpsScm {
+      scm {
+        git {
+          remote { url('file:///repo') }
+          branch('*/main')
+        }
+      }
+      scriptPath('jenkins/security.Jenkinsfile')
+    }
+  }
+}
