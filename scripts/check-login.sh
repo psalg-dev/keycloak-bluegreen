@@ -17,10 +17,12 @@ ca_file >/dev/null # sets CA_FILE
 
 jwt() { local p; p=$(cut -d. -f2 <<<"$1" | tr '_-' '/+'); while ((${#p} % 4)); do p+="="; done; base64 -d <<<"$p"; }
 
-# login <net> <user> -> id_token claims JSON on stdout
+tmpd=$(mktemp -d)
+
+# login <net> <user> -> id_token claims JSON on stdout; cookie jar + token response kept in $tmpd/<net>-<user>.{jar,tok}
 login() {
   local net=$1 user=$2 jar code loc url csrf
-  jar=$(mktemp)
+  jar=$tmpd/$net-$user.jar
   local c=(curl -s --cacert "$CA_FILE" "${resolve[@]}" -b "$jar" -c "$jar" -H 'Accept: text/html' -o "$body" -w '%{http_code} %{redirect_url}')
   local kc=https://kc-$net.localtest.me/keycloak/realms/demo cb=https://app.localtest.me/cb
   url="$kc/protocol/openid-connect/auth?client_id=k6-app&response_type=code&scope=openid%20tenant&state=s1&kc_idp_hint=legacy-$net&redirect_uri=$cb"
@@ -37,8 +39,31 @@ login() {
   code=${url#*code=}; code=${code%%&*}
   local tok; tok=$(curl -sf --cacert "$CA_FILE" "${resolve[@]}" -u "k6-app:$app_secret" -d grant_type=authorization_code \
     -d "code=$code" -d "redirect_uri=$cb" "$kc/protocol/openid-connect/token") || die "$net/$user: code exchange failed"
+  printf '%s' "$tok" > "$tmpd/$net-$user.tok"
   jwt "$(jq -r .id_token <<<"$tok")"
-  rm -f "$jar"
+}
+
+# refresh <net> <user> -> HTTP status and OAuth error of a refresh with the kept refresh token, e.g. "200 null"
+refresh() {
+  curl -s --cacert "$CA_FILE" "${resolve[@]}" -u "k6-app:$app_secret" -d grant_type=refresh_token \
+    --data-urlencode "refresh_token=$(jq -r .refresh_token "$tmpd/$1-$2.tok")" -w '\n%{http_code}' \
+    "https://kc-$1.localtest.me/keycloak/realms/demo/protocol/openid-connect/token" | jq -Rrs 'split("\n") | "\(.[1]) \(.[0] | fromjson? | .error)"'
+}
+
+# logout <net> <user>: RP-initiated logout, following the brokered round trip like a browser
+# (Keycloak -> legacy /connect/logout -> Keycloak broker logout_response). Prints the hop statuses.
+logout() {
+  local net=$1 user=$2 jar=$tmpd/$1-$2.jar code loc hops="" idt url
+  idt=$(jq -r .id_token "$tmpd/$net-$user.tok")
+  url="https://kc-$net.localtest.me/keycloak/realms/demo/protocol/openid-connect/logout?client_id=k6-app&id_token_hint=$idt"
+  for _ in $(seq 8); do
+    read -r code loc < <(curl -s --cacert "$CA_FILE" "${resolve[@]}" -b "$jar" -c "$jar" -H 'Accept: text/html' \
+      -o "$body" -w '%{http_code} %{redirect_url}' "$url")
+    hops+="$code "
+    [[ $code == 30? && -n $loc ]] || break
+    url=$loc
+  done
+  echo "$hops"
 }
 
 uid() { admin_api GET "/realms/demo/users?username=$1&exact=true" | jq -r '.[0].id'; }
@@ -57,4 +82,8 @@ expect "user4500 tenant" "$(jq -r .tenant <<<"$n")" t0
 # login_ctx = provider version of the active color's image (tag <kc>-p<N>): custom authenticator + mapper ran
 img=$(kubectl -n "$NS" get sts "kc-$(state activeColor)-keycloak" -o jsonpath='{.spec.template.spec.containers[0].image}')
 expect "login_ctx" "$(jq -r .login_ctx <<<"$a")" "v${img##*-p}"
-log "OK check-login: net1+net2 issuers, auto-link keeps sub, new user created, login_ctx v${img##*-p}"
+# logout really ends the session: refresh works before, gets invalid_grant after the brokered logout round trip
+expect "refresh before logout" "$(refresh net1 user0042)" "200 null"
+hops=$(logout net1 user0042)
+expect "refresh after logout (hops: $hops)" "$(refresh net1 user0042)" "400 invalid_grant"
+log "OK check-login: net1+net2 issuers, auto-link keeps sub, new user created, login_ctx v${img##*-p}, logout ($hops) ends the session"

@@ -182,10 +182,17 @@ export function logout() {
   if (doLogin(s, 'logout')) {
     sleep(1 + Math.random() * 2);
     let method = 'GET', url = `${kc(s.net)}/protocol/openid-connect/logout?${qs({ id_token_hint: s.idt, client_id: 'k6-app' })}`, body = null;
-    for (let i = 0; i < 3; i++) { // a logout-confirm form, if shown, is submitted as-is
+    // Brokered logout is a browser round trip: Keycloak redirects to the legacy IdP's logout, which redirects back to
+    // Keycloak's broker logout_response; only then is the Keycloak session gone. Follow redirects like a browser and
+    // submit a logout-confirm form as-is if one is shown. (Stopping at the first 302 left the session alive.)
+    for (let i = 0; i < 8; i++) {
       const t0 = now();
       const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: 'logout' } });
       log(s, 'logout', 'logout', t0, res, {});
+      if (res.status >= 300 && res.status < 400 && res.headers.Location) {
+        method = 'GET'; url = abs(res.headers.Location, url); body = null;
+        continue;
+      }
       const f = res.status === 200 ? formOf(res.body, url) : null;
       if (!f) break;
       method = f.method; url = f.action; body = f.fields;
