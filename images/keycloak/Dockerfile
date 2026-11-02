@@ -26,7 +26,9 @@ ARG KC_BUILD_OPTS="--db=postgres --cache=ispn --cache-stack=jdbc-ping --health-e
 
 USER root
 COPY images/keycloak/liblog.sh /opt/bitnami/scripts/liblog.sh
-RUN cp -a /opt/keycloak /opt/bitnami/keycloak
+# mv, not cp: one copy of Keycloak in the image (a copy doubled its size and every trivy finding). Nothing uses
+# /opt/keycloak afterwards: the chart templates and our values/scripts only reference /opt/bitnami/keycloak.
+RUN mv /opt/keycloak /opt/bitnami/keycloak
 # provider jar + theme must be in place before `kc.sh build`
 COPY --from=ext /kc-demo-ext.jar /opt/bitnami/keycloak/providers/kc-demo-ext.jar
 COPY --from=ext /themes/demo /opt/bitnami/keycloak/themes/demo
