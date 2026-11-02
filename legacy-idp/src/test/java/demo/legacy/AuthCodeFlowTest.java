@@ -23,9 +23,14 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** Drives the real auth-code + PKCE flow over HTTP, the way Keycloak's broker and a browser do. */
+/**
+ * Drives the real auth-code + PKCE flow over HTTP, the way Keycloak's broker and a browser do. The test plays the
+ * ingress: its loopback address is the trusted internal proxy here (in the cluster: the pod subnet, application.yaml).
+ * {@link UntrustedPeerTest} keeps the production trust setting and shows a non-proxy peer cannot pick the issuer.
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"LEGACY_USER_PASSWORD=pw-test", "LEGACY_CLIENT_SECRET=secret-test", "legacy.users=50"})
+        properties = {"LEGACY_USER_PASSWORD=pw-test", "LEGACY_CLIENT_SECRET=secret-test", "legacy.users=50",
+                "server.tomcat.remoteip.internal-proxies=127.0.0.0/8, ::1/128"})
 class AuthCodeFlowTest {
 
     static final String REDIRECT = "https://kc-net1.localtest.me/keycloak/realms/demo/broker/legacy-net1/endpoint";
@@ -71,11 +76,29 @@ class AuthCodeFlowTest {
     @Test
     void issuerFollowsForwardedHostSoOneInstanceServesBothNetworks() throws Exception {
         for (String host : new String[] {"legacy-net1.localtest.me", "legacy-net2.localtest.me"}) {
-            HttpResponse<String> r = http.send(HttpRequest.newBuilder(URI.create(base() + "/.well-known/openid-configuration"))
-                    .header("X-Forwarded-Host", host).header("X-Forwarded-Proto", "https").build(),
-                    HttpResponse.BodyHandlers.ofString());
-            assertThat(JSON.readTree(r.body()).get("issuer").asString()).isEqualTo("https://" + host);
+            assertThat(issuer(port, "X-Forwarded-Host", host, "X-Forwarded-Proto", "https", "X-Forwarded-Port", "443"))
+                    .isEqualTo("https://" + host);
         }
+    }
+
+    /** RFC 7239 Forwarded is ignored even from the trusted proxy, alone and next to the ingress' X-Forwarded-*. */
+    @Test
+    void forwardedHeaderNeverChangesTheIssuer() throws Exception {
+        String evil = "host=evil.example;proto=http";
+        assertThat(issuer(port)).isEqualTo(base());
+        assertThat(issuer(port, "Forwarded", evil)).isEqualTo(base());
+        assertThat(issuer(port, "Forwarded", evil, "X-Forwarded-Host", "legacy-net2.localtest.me",
+                "X-Forwarded-Proto", "https", "X-Forwarded-Port", "443")).isEqualTo("https://legacy-net2.localtest.me");
+    }
+
+    /** Discovery issuer as seen by a client sending these header name/value pairs. */
+    static String issuer(int port, String... headers) throws Exception {
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/.well-known/openid-configuration"));
+        for (int i = 0; i < headers.length; i += 2) {
+            b.header(headers[i], headers[i + 1]);
+        }
+        return JSON.readTree(HttpClient.newHttpClient().send(b.build(), HttpResponse.BodyHandlers.ofString()).body())
+                .get("issuer").asString();
     }
 
     String base() {
