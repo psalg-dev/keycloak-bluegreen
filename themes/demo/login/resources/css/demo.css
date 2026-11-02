@@ -1,0 +1,8 @@
+/* visible theme version marker: "theme v1" */
+.demo-theme-version::after {
+    content: "theme " attr(data-theme-version);
+    display: block;
+    font-size: 0.75rem;
+    opacity: 0.6;
+    text-align: right;
+}
