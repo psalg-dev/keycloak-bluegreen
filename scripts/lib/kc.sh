@@ -1,7 +1,7 @@
 # Shared functions. Source from repo root: `. scripts/lib/kc.sh`
 # shellcheck shell=bash
 
-NS=keycloak
+NS=${NS:-keycloak} # overridable, e.g. for a test namespace
 CLUSTER=kc
 CHART=oci://registry-1.docker.io/bitnamicharts/keycloak
 CHART_VERSION=25.2.0
@@ -37,10 +37,21 @@ kube_connect() {
 
 image_tag() { echo "$1-p${2:-1}"; } # <kc_version> [provider_version]
 
+# build_opts <kc_major>: `kc.sh build` options. 26 = the Dockerfile default. On 25 cache/cache-stack are runtime
+# options (build rejects them, exit 2; the chart env sets them) and there is no stateless/jdbc-ping. User sessions
+# reach the DB only with the preview feature persistent-user-sessions, which must be on from the first start.
+build_opts() {
+  case $1 in
+    25) echo "--db=postgres --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions" ;;
+    26) echo "--db=postgres --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=stateless" ;;
+    *) die "no build options for Keycloak major $1" ;;
+  esac
+}
+
 # build_image <kc_version> [provider_version]: build + load into kind (skipped if the node already has it)
 build_image() {
-  local tag; tag=$(image_tag "$1" "${2:-1}")
-  docker build -q --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" \
+  local tag opts; tag=$(image_tag "$1" "${2:-1}"); opts=$(build_opts "${1%%.*}")
+  docker build -q --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" --build-arg "KC_BUILD_OPTS=$opts" \
     --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" \
     -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . >/dev/null
   kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag"
@@ -63,8 +74,9 @@ create_db() {
 # deploy_color <color> <kc_version> <db> [provider_version]
 deploy_color() {
   local color=$1 version=$2 db=$3 tag; tag=$(image_tag "$2" "${4:-1}")
+  local overlay=(); [[ $version == 25.* ]] && overlay=(-f helm/values-kc25.yaml)
   helm upgrade --install "kc-$color" "$CHART" --version "$CHART_VERSION" -n "$NS" \
-    -f helm/values-common.yaml \
+    -f helm/values-common.yaml "${overlay[@]}" \
     --set "image.tag=$tag" \
     --set "externalDatabase.host=$db-rw" \
     --set "externalDatabase.existingSecret=$db-app" \

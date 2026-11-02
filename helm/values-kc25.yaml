@@ -1,0 +1,24 @@
+# Overlay for a Keycloak 25.x color, on top of values-common.yaml (deploy_color adds it for 25.*).
+# 25 has no jdbc-ping and no stateless feature. Each color is its own Infinispan cluster through DNS_PING on its own
+# headless Service (the chart's JAVA_OPTS_APPEND sets -Djgroups.dns.query=<release>-keycloak-headless.<ns>...),
+# so blue and green stay apart by DNS even on one DB. On 25 cache/cache-stack are runtime options (env).
+cache:
+  stack: kubernetes
+
+# Helm replaces lists, so this is the FULL list from values-common.yaml minus what 25 lacks:
+# - KC_CACHE_EMBEDDED_CLUSTER_NAME: 26.7+ option, no meaning on 25 (DNS separates the colors).
+# plus the 25 bootstrap admin: 25 reads KEYCLOAK_ADMIN*, not the chart's KC_BOOTSTRAP_ADMIN_* (those are ignored).
+extraEnvVars:
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
+  - name: KC_DB_POOL_MAX_SIZE
+    value: "30"
+  - name: KC_LOG_CONSOLE_OUTPUT
+    value: json
+  - name: KEYCLOAK_ADMIN
+    value: temp-admin # = auth.adminUser
+  - name: KEYCLOAK_ADMIN_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: kc-bootstrap-admin
+        key: password
