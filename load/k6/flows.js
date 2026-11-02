@@ -12,7 +12,7 @@
 //   user, net       userNNNN (null on reads), net1|net2
 //   sub, iss        from the access token on token lines (iss also = discovery `issuer`), else null
 //   claims          {login_ctx, tenant} from the access token, else nulls
-// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (2), DURATION (10m).
+// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), DURATION (10m).
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
@@ -25,7 +25,7 @@ const LOGIN_RATE = Number(__ENV.LOGIN_RATE || 5);
 const DURATION = __ENV.DURATION || '10m';
 const REDIRECT = 'https://app.localtest.me/cb';
 const PROBE_EVERY = 5; // s, refresh + logout_probe period
-const LOGOUT_EVERY = 30; // s, one new login+logout per logout VU
+const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU every ~45 s (login + think + 30 s)
 
 export const options = {
   scenarios: {
@@ -33,7 +33,7 @@ export const options = {
     login: { executor: 'constant-arrival-rate', exec: 'login', rate: LOGIN_RATE, timeUnit: '1s', duration: DURATION,
       preAllocatedVUs: LOGIN_RATE * 25, maxVUs: LOGIN_RATE * 50 },
     refresh: { executor: 'constant-vus', exec: 'refresh', vus: Number(__ENV.REFRESH_VUS || 10), duration: DURATION },
-    logout: { executor: 'constant-vus', exec: 'logout', vus: Number(__ENV.LOGOUT_VUS || 2), duration: DURATION },
+    logout: { executor: 'constant-vus', exec: 'logout', vus: Number(__ENV.LOGOUT_VUS || 4), duration: DURATION },
     reads: { executor: 'constant-arrival-rate', exec: 'reads', rate: 1, timeUnit: '1s', duration: DURATION,
       preAllocatedVUs: 2, maxVUs: 5 },
   },

@@ -3,7 +3,7 @@
 #   start    copies the Secrets it needs into `load`, (re)creates ConfigMap k6-flows and Job k6
 #   collect  writes k6's JSON lines (schema: top of flows.js) to out/k6.jsonl; works while k6 runs
 #   stop     stops k6 gracefully (SIGINT), collects, deletes the Job
-# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (2) DURATION (10m)
+# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) DURATION (10m)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -34,7 +34,7 @@ start)
   for s in "${!SRC[@]}"; do copy_secret "$s" "${SRC[$s]}"; done
   kubectl -n "$LNS" create configmap k6-flows --from-file=flows.js=load/k6/flows.js --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" delete job k6 --ignore-not-found --wait >/dev/null
-  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-2} DURATION=${DURATION:-10m} \
+  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} DURATION=${DURATION:-10m} \
     envsubst < k8s/k6-job.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" wait pod -l job-name=k6 --for=condition=Ready --timeout=120s >/dev/null || die "k6 pod not Ready"
   log "k6 started (rate ${LOGIN_RATE:-5}/s, ${DURATION:-10m})"

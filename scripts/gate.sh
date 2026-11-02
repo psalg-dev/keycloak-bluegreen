@@ -8,6 +8,7 @@
 # - A session is born at the t_end of its `login_token` hop; refresh and probe lines carry the login_id that minted the token.
 # - invalid_grant = the token endpoint's OAuth `error` field. logout_probe lines are excluded: they must get it.
 # - Re-login tie-back: a lost session's user+net has a later successful `relogin` token.
+# - Several `switch` events (one run, two flips): rules use the first. ponytail: split runs per flip, or loop over switches.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/lib/kc.sh"
