@@ -1,5 +1,10 @@
 {
   "realm": "demo",
   "loginTheme": "demo",
-  "eventsListeners": ["jboss-logging", "demo-replay"]
+  "eventsListeners": ["jboss-logging", "demo-replay"],
+  "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900
 }
