@@ -54,4 +54,7 @@ expect "user0042 tenant" "$(jq -r .tenant <<<"$a")" t2
 expect "user0042 links" "$(links user0042)" legacy-net1,legacy-net2
 expect "user4500 sub = created user" "$(jq -r .sub <<<"$n")" "$(uid user4500)"
 expect "user4500 tenant" "$(jq -r .tenant <<<"$n")" t0
-log "OK check-login: net1+net2 issuers, auto-link keeps sub, new user created on first broker login"
+# login_ctx = provider version of the active color's image (tag <kc>-p<N>): custom authenticator + mapper ran
+img=$(kubectl -n "$NS" get sts "kc-$(state activeColor)-keycloak" -o jsonpath='{.spec.template.spec.containers[0].image}')
+expect "login_ctx" "$(jq -r .login_ctx <<<"$a")" "v${img##*-p}"
+log "OK check-login: net1+net2 issuers, auto-link keeps sub, new user created, login_ctx v${img##*-p}"

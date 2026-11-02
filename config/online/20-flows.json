@@ -8,8 +8,20 @@
       "topLevel": true,
       "builtIn": false,
       "authenticationExecutions": [
-        { "authenticator": "idp-create-user-if-unique", "requirement": "ALTERNATIVE", "priority": 10, "autheticatorFlow": false, "userSetupAllowed": false },
-        { "authenticator": "idp-auto-link", "requirement": "ALTERNATIVE", "priority": 20, "autheticatorFlow": false, "userSetupAllowed": false }
+        {
+          "authenticator": "idp-create-user-if-unique",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "idp-auto-link",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
       ]
     },
     {
@@ -19,8 +31,36 @@
       "topLevel": true,
       "builtIn": false,
       "authenticationExecutions": [
-        { "authenticator": "auth-cookie", "requirement": "ALTERNATIVE", "priority": 10, "autheticatorFlow": false, "userSetupAllowed": false },
-        { "authenticator": "identity-provider-redirector", "requirement": "ALTERNATIVE", "priority": 20, "autheticatorFlow": false, "userSetupAllowed": false }
+        {
+          "authenticator": "auth-cookie",
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "identity-provider-redirector",
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "post-broker-demo",
+      "description": "After every broker login: records which provider version handled it (login_ctx)",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "demo-login-context",
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        }
       ]
     }
   ]

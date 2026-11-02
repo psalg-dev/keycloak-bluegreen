@@ -1,0 +1,5 @@
+{
+  "realm": "demo",
+  "loginTheme": "demo",
+  "eventsListeners": ["jboss-logging", "demo-replay"]
+}

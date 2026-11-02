@@ -3,16 +3,17 @@
   "clientScopes": [
     {
       "name": "tenant",
-      "description": "tenant claim (custom mapper replaces this built-in one once the provider JAR is in the image)",
+      "description": "tenant claim from the user attribute (custom provider demo-tenant-mapper)",
       "protocol": "openid-connect",
-      "attributes": { "include.in.token.scope": "true" },
+      "attributes": {
+        "include.in.token.scope": "true"
+      },
       "protocolMappers": [
         {
           "name": "tenant",
           "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "config": { "user.attribute": "tenant", "claim.name": "tenant", "jsonType.label": "String",
-                      "id.token.claim": "true", "access.token.claim": "true", "userinfo.token.claim": "true" }
+          "protocolMapper": "demo-tenant-mapper",
+          "config": {}
         }
       ]
     }
@@ -26,10 +27,28 @@
       "secret": "$(env:K6_APP_SECRET)",
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": false,
-      "redirectUris": ["https://app.localtest.me/cb"],
-      "attributes": { "post.logout.redirect.uris": "https://app.localtest.me/*" },
-      "defaultClientScopes": ["profile", "email", "basic"],
-      "optionalClientScopes": ["tenant"]
+      "redirectUris": [
+        "https://app.localtest.me/cb"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://app.localtest.me/*"
+      },
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "basic"
+      ],
+      "optionalClientScopes": [
+        "tenant"
+      ],
+      "protocolMappers": [
+        {
+          "name": "login_ctx",
+          "protocol": "openid-connect",
+          "protocolMapper": "demo-login-context-mapper",
+          "config": {}
+        }
+      ]
     }
   ]
 }
