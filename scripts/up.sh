@@ -51,13 +51,9 @@ LEGACY_IMAGE=docker.io/$LEGACY_IMAGE envsubst < k8s/legacy/legacy-idp.yaml.tpl |
 kubectl -n legacy rollout status deploy/legacy-idp --timeout=300s >/dev/null
 log "legacy-idp ready: https://legacy-net1.localtest.me, https://legacy-net2.localtest.me"
 
-build_image "$FROM" 1
 kubectl apply -f k8s/edge/ >/dev/null
 if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then
-  deploy_color blue "$FROM" pg-1 1
-  set_active blue pg-1 "$FROM"
-  for stage in bootstrap online maintenance; do scripts/config.sh "$stage" blue; done # first install: no traffic yet
-  scripts/seed-users.sh 4000
+  first_install "$FROM" 1 pg-1
 else
   set_active "$(state activeColor)" "$(state activeDb)" "$(state version)" # k8s/edge/ hard-codes blue; state wins
 fi

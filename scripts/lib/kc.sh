@@ -108,3 +108,13 @@ ca_file() {
   fi
   echo "$CA_FILE"
 }
+
+# first_install <kc_version> <provider_version> <db>: blue on a fresh DB, config stages, seeded users. No traffic yet,
+# so the maintenance stage runs right away.
+first_install() {
+  build_image "$1" "$2"
+  deploy_color blue "$1" "$3" "$2"
+  set_active blue "$3" "$1"
+  local stage; for stage in bootstrap online maintenance; do scripts/config.sh "$stage" blue; done
+  scripts/seed-users.sh 4000
+}
