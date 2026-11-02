@@ -1,0 +1,15 @@
+# THE blue/green switch: scripts/lib/kc.sh set_active patches the selector's instance label.
+# ingress-nginx routes to the endpoints behind this Service, which it updates without a reload.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kc-active
+  namespace: keycloak
+spec:
+  selector:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/instance: kc-blue
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

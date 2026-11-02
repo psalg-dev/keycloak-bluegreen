@@ -41,6 +41,12 @@ Demos are STANDALONE (user's choice): `scripts/demo.sh <patch|minor|major|all>`.
 Colors are slots, DBs are generations: the active color and active DB are recorded in ConfigMap
 `kc-state` (`activeColor`, `activeDb`, `version`), in namespace `keycloak`. Never derive one from the other.
 
+**Context path `/keycloak`** (user, 2026-11-02): the public base is `https://kc.localtest.me/keycloak`. Every Keycloak
+path in this plan (`/realms/...`, `/admin`, `/health/...`, freeze paths, broker redirect URIs) is relative to `/keycloak`.
+It is baked at build (`--http-relative-path=/keycloak`) and must equal the chart's `httpRelativePath` exactly.
+On 26.8.1 a mismatch makes `start --optimized` exit with code 2 after a single warning line, hiding the real error.
+The management port inherits it (`/keycloak/health/*`).
+
 ### Topology
 ```
 docker compose (host: only Docker needed)
@@ -66,8 +72,8 @@ back-channel and k6 all use the same public URLs as the host browser. No hostAli
 Keycloak trusts the demo CA via the chart's `trustedCertsExistingSecret` (-> `KC_TRUSTSTORE_PATHS`).
 ```
 Jenkins UI: http://localhost:8081 (8080 taken on dev box). Jenkins reaches the API server over the
-docker network `kind` (compose declares it with `name: kind`; kind reuses an existing network of that
-name. If it refuses, the fallback is `KIND_EXPERIMENTAL_DOCKER_NETWORK=<compose network>`; Slice 1 checks this).
+docker network `kind`. Compose does NOT declare it: a `kind` network created by another kind cluster carries no compose
+labels, and compose refuses to adopt it. Instead the launcher entrypoint (`kube_connect`) runs `docker network connect kind`.
 Kubeconfig via `kind get kubeconfig --internal`.
 `demo.sh` runs with `ROLLBACK_HOLD=0` (the next case resets anyway); Jenkins builds default to 10m.
 
@@ -76,8 +82,9 @@ Kubeconfig via `kind get kubeconfig --internal`.
   sessions, action tokens, brute-force counters go to the DB; cross-cluster cache invalidation via a
   DB outbox polled every 100 ms. User sessions are in the DB anyway (persistent-user-sessions, 26.0+).
 - Default discovery since 26.1 is `jdbc-ping` (through the DB). Blue and green share a DB, so EACH
-  COLOR MUST SET ITS OWN cluster name: `--spi-cache-embedded--default--cluster-name=kc-<color>`
-  (env `KC_SPI_CACHE_EMBEDDED__DEFAULT__CLUSTER_NAME`; verify the env spelling in Slice 1).
+  COLOR MUST SET ITS OWN cluster name. On 26.8.1 that is `cache-embedded-cluster-name` (env `KC_CACHE_EMBEDDED_CLUSTER_NAME`),
+  and it is REQUIRED once `stateless` is on. The SPI form from the nightly docs is ignored.
+  Verified in Slice 1: JGroups channel `kc-blue`, `jgroups_ping.cluster_name = kc-blue`.
 - Bitnami chart: latest is `oci://registry-1.docker.io/bitnamicharts/keycloak` **25.2.0**
   (appVersion 26.3.3, frozen). Templates hard-code `/opt/bitnami/keycloak/{conf,lib/quarkus,data,
   providers,themes}`. The init container `prepare-write-dirs` runs `/bin/bash` and sources
@@ -158,7 +165,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 ## Invariants (all slices)
 - caveman + ponytail. Bash only (`set -euo pipefail`). No script over ~150 lines; shared functions go in `scripts/lib/kc.sh`.
 - Production realism, not dev mode:
-  - `kc.sh start --optimized`, `KC_HOSTNAME=https://kc.localtest.me`, hostname strict, `KC_PROXY_HEADERS=xforwarded`, TLS at ingress (CA + cert from `scripts/certs.sh`, openssl).
+  - `kc.sh start --optimized`, `KC_HOSTNAME=https://kc.localtest.me/keycloak`, hostname strict, `KC_PROXY_HEADERS=xforwarded`, TLS at ingress (CA + cert from `scripts/certs.sh`, openssl).
   - Per pod: requests 1 CPU / 1.5Gi, limit 2Gi. Anti-affinity + topologySpread across zones. PDB `maxUnavailable: 1`.
   - Readiness `GET /health/ready` on management port 9000. Liveness `/health/live` (period 10s, not the chart's 1s).
   - `preStop: sleep 15`, `terminationGracePeriodSeconds: 60`.
@@ -171,13 +178,14 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - **Files**: create `compose.yaml`, `images/launcher/Dockerfile`, `images/jenkins/Dockerfile` (stub,
   filled in Slice 7), `images/keycloak/Dockerfile`, `images/keycloak/liblog.sh`, `kind/cluster.yaml`,
   `scripts/up.sh`, `scripts/down.sh`, `scripts/certs.sh`, `scripts/lib/kc.sh`, `k8s/postgres/pg.yaml.tpl`,
-  `k8s/edge/{kc-active.yaml,ingress.yaml}`, `helm/values-common.yaml`, `helm/values-color.yaml.tpl`
+  `k8s/edge/{kc-active.yaml,ingress.yaml}`, `helm/values-common.yaml` (no per-color file: the chart tpl-renders
+  extraEnvVars, so the cluster name is `{{ .Release.Name }}`), `scripts/check-cluster.sh`, `scripts/smoke.sh`, `scripts/test-lib.sh`
 - **Contract**:
   - `scripts/up.sh`: idempotent. Creates cluster `kc`, installs ingress-nginx, CNPG, certs, `pg-1`, and builds +
     `kind load`s `kc-demo:<ver>-p<provider>`.
   - `scripts/lib/kc.sh deploy_color <color> <version> <db>`: helm upgrade --install with `--wait`.
   - `kc.sh set_active <color>`: patches the `kc-active` selector and writes the `kc-state` ConfigMap.
-  - Example: `deploy_color blue 26.7.5 pg-1 && set_active blue` -> `curl -k https://kc.localtest.me/realms/master/.well-known/openid-configuration` returns 200 with `"issuer":"https://kc.localtest.me/realms/master"`.
+  - Example: `deploy_color blue 26.7.5 pg-1 && set_active blue` -> `scripts/smoke.sh` (in-cluster, TLS verified against the demo CA) gets `"issuer":"https://kc.localtest.me/keycloak/realms/master"` and an admin token.
 - **Tests**: `scripts/check-cluster.sh blue` asserts: 3 Ready pods on 3 distinct zones; the JGroups view
   has size 3 and contains only kc-blue pods (grep pod logs for `ISPN000094`); `kc-state.activeColor=blue`.
 - **Regression scope**: none (pure create)
@@ -192,7 +200,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - **Contract**: issuer `https://legacy.localtest.me`. Users `user0001`..`user5000`, password from env
   `LEGACY_USER_PASSWORD`, encoded ONCE at startup and shared by all users. Claim `sub` = username,
   attribute claim `tenant` = `t<n % 10>`. Registered client `keycloak-broker` (confidential, auth code + PKCE,
-  redirect `https://kc.localtest.me/realms/demo/broker/legacy/endpoint`). Form login, SSO session 8h.
+  redirect `https://kc.localtest.me/keycloak/realms/demo/broker/legacy/endpoint`). Form login, SSO session 8h.
   Use the latest Spring Boot / Spring Authorization Server line; check versions at build.
   Example: `curl https://legacy.localtest.me/.well-known/openid-configuration` -> `"issuer":"https://legacy.localtest.me"`.
 - **Tests**: Spring Boot test: auth-code flow for `user0042` yields an id_token with `sub=user0042` and `tenant=t2`.

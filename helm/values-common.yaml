@@ -1,0 +1,110 @@
+# Bitnami keycloak chart 25.2.0 running our own image (official Keycloak re-laid into the Bitnami layout).
+# Per-color values (image.tag, externalDatabase.*) are passed by scripts/lib/kc.sh deploy_color.
+global:
+  security:
+    allowInsecureImages: true
+
+image:
+  registry: docker.io
+  repository: kc-bluegreen/keycloak
+  pullPolicy: Never # loaded with `kind load`
+
+replicaCount: 3
+usePasswordFiles: false # *_FILE env is only understood by Bitnami's own scripts
+command: ["/opt/bitnami/keycloak/bin/kc.sh"]
+args: ["start", "--optimized"]
+
+auth:
+  adminUser: temp-admin # bootstrap only; config-cli stages use their own client afterwards
+  existingSecret: kc-bootstrap-admin
+  passwordSecretKey: password
+
+httpEnabled: true # TLS terminates at ingress-nginx
+# Context path. Must equal the image's build-time --http-relative-path exactly (no trailing slash), or
+# `start --optimized` exits 2. The chart's own probes would append "realms/master" to it; we use custom probes.
+httpRelativePath: /keycloak
+proxyHeaders: xforwarded
+metrics:
+  enabled: true # must match the build (--metrics-enabled=true)
+cache:
+  enabled: true
+  stack: jdbc-ping # must match the build
+  configFile: cache-ispn.xml
+
+postgresql:
+  enabled: false
+externalDatabase:
+  port: 5432
+  database: keycloak
+  schema: public
+  existingSecretUserKey: username
+  existingSecretPasswordKey: password
+
+extraEnvVars:
+  - name: KC_HOSTNAME
+    value: https://kc.localtest.me/keycloak
+  # Each color is its own Infinispan cluster. Both share a DB and jdbc-ping discovers via the DB,
+  # so without distinct names blue and green would merge into one mixed cluster.
+  - name: KC_CACHE_EMBEDDED_CLUSTER_NAME # 26.8: required with stateless; the SPI form is ignored
+    value: "{{ .Release.Name }}"
+  - name: KC_DB_POOL_MAX_SIZE
+    value: "30"
+  - name: KC_LOG_CONSOLE_OUTPUT
+    value: json
+
+# The chart mounts an emptyDir over conf/ but its own init container does not copy conf/ (cache-ispn.xml lives there).
+initContainers:
+  - name: copy-conf
+    image: '{{ include "keycloak.image" . }}'
+    imagePullPolicy: Never
+    command: ["bash", "-c", "mkdir -p /emptydir/app-conf-dir && cp -r /opt/bitnami/keycloak/conf/. /emptydir/app-conf-dir/"]
+    volumeMounts:
+      - name: empty-dir
+        mountPath: /emptydir
+
+resourcesPreset: none
+resources:
+  requests: { cpu: "1", memory: 1536Mi }
+  limits: { memory: 2Gi }
+
+podAntiAffinityPreset: hard
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: "{{ .Release.Name }}"
+pdb:
+  create: true
+  maxUnavailable: 1
+
+startupProbe:
+  enabled: false
+livenessProbe:
+  enabled: false
+readinessProbe:
+  enabled: false
+customStartupProbe:
+  httpGet: { path: /keycloak/health/started, port: 9000 }
+  periodSeconds: 5
+  failureThreshold: 60
+customLivenessProbe:
+  httpGet: { path: /keycloak/health/live, port: 9000 }
+  periodSeconds: 10
+  failureThreshold: 3
+customReadinessProbe:
+  httpGet: { path: /keycloak/health/ready, port: 9000 }
+  periodSeconds: 5
+  failureThreshold: 2
+
+# Endpoint removal propagates to ingress-nginx before the JVM stops accepting requests.
+lifecycleHooks:
+  preStop:
+    sleep: { seconds: 15 }
+terminationGracePeriodSeconds: 60
+
+service:
+  type: ClusterIP
+ingress:
+  enabled: false # traffic enters via Ingress kc -> Service kc-active (the blue/green switch)
