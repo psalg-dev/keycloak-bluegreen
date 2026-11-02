@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
 
+log "reset: removing load, both colors, freeze, config jobs, all DBs (waits for CNPG cleanup)"
 kubectl -n load delete job --all --ignore-not-found >/dev/null 2>&1 || true
 for c in blue green; do helm -n "$NS" uninstall "kc-$c" --wait >/dev/null 2>&1 || true; done
 kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null

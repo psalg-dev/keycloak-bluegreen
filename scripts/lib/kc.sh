@@ -66,6 +66,7 @@ ensure_secret() {
 
 # create_db <name>: CNPG cluster, waits until Ready
 create_db() {
+  log "creating db $1 (3 instances, sync replication) and waiting for Ready"
   DB=$1 NS=$NS envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$1" --for=condition=Ready --timeout=600s >/dev/null
   log "db $1 ready"
@@ -75,6 +76,7 @@ create_db() {
 deploy_color() {
   local color=$1 version=$2 db=$3 tag; tag=$(image_tag "$2" "${4:-1}")
   local overlay=(); [[ $version == 25.* ]] && overlay=(-f helm/values-kc25.yaml)
+  log "deploying kc-$color @ $version ($tag) on $db, waiting for 3 Ready pods (helm --wait)"
   helm upgrade --install "kc-$color" "$CHART" --version "$CHART_VERSION" -n "$NS" \
     -f helm/values-common.yaml "${overlay[@]}" \
     --set "image.tag=$tag" \
@@ -184,4 +186,21 @@ delete_dbs() {
     sleep 2
   done
   die "old CNPG pods/PVCs/secrets still present"
+}
+
+# wait_progress <seconds> <label>: sleep, but log every 30 s what the load generator sees so far
+# (requests, 5xx/status 0, invalid_grant, logins completed). Silent sleeps make a live run look dead.
+wait_progress() {
+  local total=$1 label=$2 waited=0 step p
+  while ((waited < total)); do
+    step=$((total - waited < 30 ? total - waited : 30)); sleep "$step"; waited=$((waited + step))
+    p=$(kubectl -n load get pod -l job-name=k6 -o name 2>/dev/null | head -1)
+    if [[ -n $p ]]; then
+      log "$label ${waited}/${total}s | k6: $(kubectl -n load exec "$p" -- cat /out/k6.log 2>/dev/null \
+        | jq -rRs '[split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
+          | "\(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant")) | length) invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins"')"
+    else
+      log "$label ${waited}/${total}s"
+    fi
+  done
 }

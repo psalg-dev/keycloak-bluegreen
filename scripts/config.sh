@@ -30,6 +30,7 @@ managed='[]' # online must never delete: every managed entity type -> no-delete
   client client-authorization-resources client-authorization-policies client-authorization-scopes message-bundles \
   | jq -R '{name: ("IMPORT_MANAGED_" + (ascii_upcase | gsub("-"; ""))), value: "no-delete"}' | jq -s .)
 
+log "config $stage -> kc-$color: running config-cli Job"
 kubectl -n "$NS" create configmap "$job" --from-file="config/$stage/" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$NS" delete job "$job" --ignore-not-found >/dev/null
 jq -n --arg job "$job" --arg color "$color" --arg image "$cli" --argjson managed "$managed" "

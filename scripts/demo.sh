@@ -17,7 +17,7 @@ run_case() {
   scripts/reset.sh
   first_install "$from" "$fp" pg-1
   scripts/load.sh start
-  sleep "${WARMUP_SECONDS:-120}"
+  wait_progress "${WARMUP_SECONDS:-120}" warm-up
   case $mech in
     shared) scripts/switch-shared.sh "$to" "$tp" ;;
     lossy) scripts/switch-lossy.sh "$to" ;;
@@ -25,10 +25,10 @@ run_case() {
     lossy-rollback) KEEP_OLD=true scripts/switch-lossy.sh "$to" ;;
   esac
   if [[ $mech == *-rollback ]]; then
-    sleep "${SOAK_SECONDS:-90}" # sessions and logouts happen on the new color, so the rollback has something to lose
+    wait_progress "${SOAK_SECONDS:-90}" soak # sessions and logouts happen on the new color, so the rollback has something to lose
     REASON=drill scripts/rollback.sh
   fi
-  sleep "${COOLDOWN_SECONDS:-90}" # lossy: probes must run well after replay_done
+  wait_progress "${COOLDOWN_SECONDS:-90}" cool-down # lossy: probes must run well after replay_done
   scripts/load.sh stop
   mkdir -p "out/$name"
   mv out/events.jsonl out/k6.jsonl "out/$name/"
