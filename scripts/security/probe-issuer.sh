@@ -1,25 +1,34 @@
 #!/usr/bin/env bash
 # probe issuer: issuer forgery at the edge. With hostname-strict=false Keycloak (and the legacy IdP) build the issuer
-# from the forwarded host, so no client-controlled header sent through the ingress may change the discovery issuer.
+# from the forwarded host, so no client-controlled header sent through the ingress may change the discovery issuer,
+# and a Host that only differs in case, trailing dot or port is refused (421), never answered with another issuer.
 # An unknown Host must not reach Keycloak at all.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/lib/kc.sh
 . scripts/security/lib.sh
 
-# HOST / UPPER are replaced per target. The last three vary only the Host header the ingress forwards as-is.
 spoofs=('X-Forwarded-Host: evil.example' 'X-Forwarded-Proto: http' 'X-Forwarded-Port: 8443'
   'Forwarded: host=evil.example;proto=http' 'X-Original-Host: evil.example' 'X-Forwarded-Server: evil.example'
-  'Host: HOST:8443' 'Host: UPPER' 'Host: HOST.')
+  'X-Forwarded-Prefix: /evil')
+# Non-canonical Host (HOST / UPPER replaced per target): nginx routes it to the host's server (case-insensitive, trailing
+# dot and port ignored) and used to forward it raw. The edge must answer exactly 421 (server-snippet, scripts/up.sh);
+# any other answer, an issuer above all, is a FAIL.
+hosts=('HOST:8443' 'HOST:443' 'UPPER' 'HOST.')
 n=0
 # check <host> <discovery url> <expected issuer>
 check() {
-  local host=$1 url=$2 want=$3 s hdr got
+  local host=$1 url=$2 want=$3 s hdr got r
   for s in "" "${spoofs[@]}"; do
-    hdr=${s//UPPER/${host^^}}; hdr=${hdr//HOST/$host}
-    got=$(pub ${hdr:+-H "$hdr"} "$url" | jq -r .issuer 2>/dev/null) || got="(no JSON)"
+    got=$(pub ${s:+-H "$s"} "$url" | jq -r .issuer 2>/dev/null) || got="(no JSON)"
     n=$((n + 1))
-    [[ $got == "$want" ]] || fail "$host ${hdr:-(no spoof)} -> issuer '$got'"
+    [[ $got == "$want" ]] || fail "$host ${s:-(no spoof)} -> issuer '$got'"
+  done
+  for s in "${hosts[@]}"; do
+    hdr=${s//UPPER/${host^^}}; hdr="Host: ${hdr//HOST/$host}"
+    r=$(pub -H "$hdr" -w '\n%{http_code}' "$url")
+    n=$((n + 1))
+    [[ ${r##*$'\n'} == 421 && $r != *issuer* ]] || fail "$host $hdr -> HTTP ${r##*$'\n'}, want 421: ${r:0:80}"
   done
 }
 for h in "${KC_HOSTS[@]}"; do
@@ -37,4 +46,4 @@ for r in "$a" "$b"; do
   n=$((n + 1))
   [[ ${r##*$'\n'} == 404 && $r != *issuer* ]] || fail "unknown host reached Keycloak: HTTP ${r##*$'\n'} ${r:0:80}"
 done
-finish "$n issuer checks: no header changes the issuer; unknown host gets the ingress 404"
+finish "$n issuer checks: no header changes the issuer; non-canonical Host gets 421; unknown host gets the ingress 404"

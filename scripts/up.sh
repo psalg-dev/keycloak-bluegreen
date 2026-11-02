@@ -13,6 +13,22 @@ kube_connect
 
 kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/$INGRESS_NGINX/deploy/static/provider/kind/deploy.yaml" >/dev/null
 kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeout=300s >/dev/null
+# Edge hardening, controller-wide (covers kc, kc-freeze and legacy-idp alike); headers: k8s/edge/ingress-nginx.yaml.
+# One issuer per host: nginx picks the server case-insensitively and ignores a trailing dot, but forwards the RAW Host
+# as X-Forwarded-Host ($best_http_host = $http_host, nginx.tmpl), so `Host: KC-NET1.LOCALTEST.ME` or
+# `kc-net1.localtest.me.` changed the issuer. $host is nginx's normalised Host (lower case, no port, no trailing dot):
+# a request whose raw Host differs gets 421 Misdirected Request at server level, before any location or backend.
+# Rejected: proxy-set-headers X-Forwarded-Host "$host" (appended AFTER the built-in line = two X-Forwarded-Host
+# headers); upstream-vhost (sets Host only, one value per Ingress, X-Forwarded-Host stays raw); snippet ANNOTATIONS
+# (need allow-snippet-annotations=true + annotations-risk-level=Critical, i.e. raw nginx config for every Ingress author).
+# A ConfigMap server-snippet is admin-only and needs neither (the controller gates only *-snippet annotations).
+# The hash annotation makes the controller reload when only the referenced ConfigMaps change (it watches just this one).
+kubectl apply -f k8s/edge/ingress-nginx.yaml >/dev/null
+# shellcheck disable=SC2016 # nginx variables, literal
+kubectl -n ingress-nginx patch configmap ingress-nginx-controller --type merge -p "$(jq -nc \
+  --arg h "$(sha256sum k8s/edge/ingress-nginx.yaml | cut -c1-16)" '{metadata: {annotations: {"kc-bluegreen/edge": $h}},
+  data: {"server-snippet": "if ($http_host != $host) { return 421; }",
+    "proxy-set-headers": "ingress-nginx/kc-proxy-headers", "add-headers": "ingress-nginx/kc-response-headers"}}')" >/dev/null
 log "ingress-nginx ready"
 
 # *.localtest.me -> ingress inside the cluster too, so pods use the same URLs as the host browser.
