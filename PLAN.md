@@ -4,13 +4,21 @@ Research and decision trail: `C:\dev\_worklogs\keycloak-bluegreen\2026-11-02-res
 
 ## Shared context
 
-### Two change paths, both proven under load
-| Path | Example in demo | DB | Downtime claim |
-|---|---|---|---|
-| **same-minor** | 26.8.0 -> 26.8.1 patch + provider/theme/config change | one shared CNPG cluster | zero: gate = 0 x 5xx, in-flight logins survive |
-| **minor upgrade** | 26.7.5 -> 26.8.0 | green gets its own CNPG cluster (replica of blue's, promoted) | **lossy overlap**: no login/token outage. Blue serves while green's copy migrates. Sessions created on blue in the window are lost, and those users re-login silently via the legacy IdP's SSO. Logouts and first-broker-login user creations from the window are REPLAYED onto green. Only `/admin` + account console get 503. Window length and sessions lost are measured. |
+### Three cases, two mechanisms, all proven under load
+| Case (`CASE=`) | FROM -> TO (standalone run) | Mechanism | DB | Downtime claim |
+|---|---|---|---|---|
+| **patch** | 26.8.0 -> 26.8.1, plus provider v2 + theme v2 + online config | shared-DB switch | one shared CNPG cluster | zero: gate = 0 x 5xx, in-flight logins survive |
+| **minor** | 26.7.5 -> 26.8.1 | lossy overlap | green gets its own CNPG cluster (replica of blue's, promoted) | no login/token outage (see below) |
+| **major** | 25.0.6 -> 26.8.1 | lossy overlap | same as minor | same as minor, plus a measured cross-major refresh-token result |
 
-Why there are two paths: Keycloak does not support two different major.minor versions on one DB
+**Lossy overlap**:
+- No login/token outage: blue keeps serving while green's copy migrates.
+- Sessions created on blue in the window are lost; those users re-login silently via the legacy IdP's SSO.
+- Logouts and first-broker-login user creations from the window are REPLAYED onto green.
+- Only `/admin` + the account console get 503.
+- Window length and sessions lost are measured.
+
+Why two mechanisms: Keycloak does not support two different major.minor versions on one DB
 ("Deploying different Keycloak major/minor versions on each of the sites is not supported",
 multi-cluster v2 upgrades doc). A patch upgrade on one shared DB is supported.
 On the minor path a write made on blue after the copy point has to be blocked, lost or replayed.
@@ -24,10 +32,11 @@ Strict write-freeze variant (503 on login/token during migration): designed earl
 Users: the legacy IdP has 5k users. Keycloak has users 1-4000 pre-linked (federated identity
 `legacy`); 4001-5000 hit first-broker-login on their first login (exercises the creation-replay path).
 
-Demo narrative (one run of `scripts/demo.sh` = what the README walks through):
-1. bootstrap blue @ 26.7.5 on `pg-1`
-2. **minor**: green @ 26.8.0 on `pg-2` (replica of pg-1 -> promoted -> migrated)
-3. **same-minor**: blue @ 26.8.1 + provider v2 + theme v2 + online config, on shared `pg-2`
+Demos are STANDALONE (user's choice): `scripts/demo.sh <patch|minor|major|all>`.
+- Each case starts with `scripts/reset.sh`: uninstall both colors, delete every `pg-*`, delete the `load` Jobs, and recreate `pg-1`.
+- Then it bootstraps blue at the case's FROM version (config bootstrap + online, seed users), warms up 2 min under load, and runs the case's switch under load.
+- `all` = the three cases in sequence, with a reset between them.
+- One case = one Jenkins build (param `CASE`). The legacy IdP, ingress, CNPG operator and Jenkins survive resets.
 
 Colors are slots, DBs are generations: the active color and active DB are recorded in ConfigMap
 `kc-state` (`activeColor`, `activeDb`, `version`), in namespace `keycloak`. Never derive one from the other.
@@ -60,8 +69,7 @@ Jenkins UI: http://localhost:8081 (8080 taken on dev box). Jenkins reaches the A
 docker network `kind` (compose declares it with `name: kind`; kind reuses an existing network of that
 name. If it refuses, the fallback is `KIND_EXPERIMENTAL_DOCKER_NETWORK=<compose network>`; Slice 1 checks this).
 Kubeconfig via `kind get kubeconfig --internal`.
-`scripts/demo.sh` sets `ROLLBACK_HOLD=0` between narrative steps 2 and 3: step 3 redeploys the blue slot,
-which step 2 would otherwise still be holding for rollback.
+`demo.sh` runs with `ROLLBACK_HOLD=0` (the next case resets anyway); Jenkins builds default to 10m.
 
 ### Fixed facts (verified 2026-11-02)
 - Keycloak 26.8.1 latest; 26.8.0 and 26.7.5 exist. `stateless` feature = preview since 26.7: auth
@@ -86,8 +94,17 @@ which step 2 would otherwise still be holding for rollback.
   The chart env (`KC_CACHE`, `KC_CACHE_STACK`, `KC_METRICS_ENABLED`) must match it. Without
   `--health-enabled=true`, `/health/ready` returns 404 and no pod ever goes Ready. `stateless` is
   build-time, so the Slice 5 negative control needs a second image tag (`-nostateless`).
-- keycloak-config-cli: image `adorsys/keycloak-config-cli:6.5.0-26`, built against KC 26.5.4.
+- keycloak-config-cli images are picked per Keycloak MAJOR of the target color: `adorsys/keycloak-config-cli:6.5.1-26.5.5`
+  for 26.x, `6.5.1-25` (built against 25.0.1) for 25.x (Docker Hub tag list, 2026-11-02).
   A version mismatch silently drops fields it does not know -> the dropped-field check in Slice 2 is mandatory.
+- Keycloak 25 differs from 26 in ways the image/values must handle (Slice 6b):
+  - User sessions are in the DB only with the preview flag `persistent-user-sessions`. It must be on from
+    the FIRST start; enabling it later never migrates existing sessions. Spelling: the 25.0.0 docs say
+    `persistent-user-session`, later docs the plural; verify on 25.0.6.
+  - No `stateless`, no `jdbc-ping`: use `--cache-stack=kubernetes` (DNS_PING on the release's headless
+    Service, so colors are separated by DNS).
+  - Bootstrap admin env is `KEYCLOAK_ADMIN`/`KEYCLOAK_ADMIN_PASSWORD` (not `KC_BOOTSTRAP_ADMIN_*`).
+  - No `update-compatibility` command.
 - ingress-nginx has been EOL since March 2026. It is used because it is the user's production edge. The
   switch mechanism (Service selector) does not depend on the edge. Do NOT use `use-regex` (it applies to all
   paths of the host); freeze paths are plain Prefix paths.
@@ -100,8 +117,8 @@ which step 2 would otherwise still be holding for rollback.
   `legacy` (OIDC, client `keycloak-broker`, sync mode FORCE, mappers `tenant` attr), clients, client
   scopes (`tenant`), mappers, roles, groups, theme selection, event listeners, additive flows.
 - **maintenance**: breaking changes (rebind browser flow, delete/rename clients or scopes).
-  On the minor path it runs against green's DB during the freeze, which costs no extra downtime.
-  On the same-minor path it needs its own short write-freeze (same `kc-freeze` mechanism, since the DB
+  On the minor/major path it runs against green's own DB before the switch, which costs no extra downtime.
+  On the patch (shared-DB) path it needs its own short write-freeze (same `kc-freeze` mechanism, since the DB
   is shared). That is the honest limit of blue-green on a shared DB.
 - Settings for all stages: `import.remote-state.enabled=true`, `import.var-substitution.enabled=true`
   (client secrets from env), `import.validate=true`. Keep `import.managed.*` at the defaults except
@@ -113,14 +130,16 @@ which step 2 would otherwise still be holding for rollback.
   first-login refresh token to survive the whole demo.
 
 ### Custom code (realism, baked into the image)
-`providers/` Maven module `kc-demo-ext`, built against `keycloak-services` ${kc.version}, the lowest version deployed (26.7.5):
+`providers/` Maven module `kc-demo-ext`, ONE source tree built per Keycloak major via Maven profiles `kc25` (25.0.6)
+and `kc26` (26.7.5, the lowest 26 deployed); jar classifier `-kc25`/`-kc26`. The image Dockerfile picks the jar by major.
+If the 25 vs 26 SPI forces a code difference, isolate it in one class per profile (`src/kc25`, `src/kc26`); don't fork the module.
 - `TenantMapper`: OIDC protocol mapper, user attribute `tenant` -> claim `tenant`. Attached to client scope `tenant`.
 - `LoginContextAuthenticator`: no-UI authenticator in custom flow `browser-demo`. Sets auth note
   `login_ctx=<provider version>`. `LoginContextMapper` copies it to claim `login_ctx`. The claim
-  proves which provider version handled the login (v1 -> v2 across same-minor).
+  proves which provider version handled the login (v1 -> v2 across the patch case).
 - `ReplayEventListener`: event listener. For each `LOGOUT` and first-broker-login user creation
   (`IDENTITY_PROVIDER_FIRST_LOGIN` / `REGISTER` with `identity_provider` detail; verify the exact event
-  types on 26.7.5 in Slice 3), it writes ONE JSON line to stdout tagged `"replay":true`: `type, time,
+  types on 25.0.6 AND 26.7.5 in Slice 3), it writes ONE JSON line to stdout tagged `"replay":true`: `type, time,
   realmId, sessionId, userId`. For creations it also writes `username, email, attributes,
   federatedIdentities`, loaded via the KeycloakSession. Token revocation (`/revoke`): check which event it
   emits; if one exists, replay it as a session delete (conservative superset).
@@ -129,9 +148,9 @@ which step 2 would otherwise still be holding for rollback.
   marker `data-theme-version`.
 
 ### Run / test
-- Everything: `docker compose up -d` -> Jenkins at :8081, job `kc-bluegreen` (params: `PATH_TYPE`
-  = bootstrap|minor|same-minor, `TARGET_VERSION`, `PROVIDER_VERSION`, `RUN_MAINTENANCE`).
-- Full narrative without clicking: `docker compose run --rm launcher scripts/demo.sh`
+- Everything: `docker compose up -d` -> Jenkins at :8081, job `kc-bluegreen` (params: `CASE` = patch|minor|major,
+  `RUN_MAINTENANCE`; FROM/TO versions come from `cases.env`, one line per case, so they are never typed by hand).
+- All three demos without clicking: `docker compose run --rm launcher scripts/demo.sh all`
 - Unit: `mvn -f providers verify` (in the jenkins image)
 - Static: `shellcheck scripts/*.sh scripts/lib/*.sh`, and `helm template` + `kubeconform` on values
 - The real test is the gate (Slice 4). Every path slice is done only when its gate is green in a real run.
@@ -216,7 +235,7 @@ which step 2 would otherwise still be holding for rollback.
   The listener turns a LOGOUT event into exactly one JSON line with `replay:true,type,time,realmId,userId,sessionId`;
   a non-replayed event type (e.g. `CODE_TO_TOKEN`) -> no line.
 - **Regression scope**: none (pure create); the image rebuild must keep Slice 1's check green.
-- **Done**: `mvn verify` green. An image with the jar boots; the claims appear in a manual auth-code login.
+- **Done**: `mvn -P kc26 verify` green (and `-P kc25` compiles + tests green; it is used from Slice 6b). An image with the jar boots; the claims appear in a manual auth-code login.
 - **Don't touch**: config/ (Slice 2 owns it; Slice 3 only names `browser-demo`, `tenant`, `demo` to match)
 - **Depends on**: 1 (image); runtime check needs 2
 
@@ -241,11 +260,11 @@ which step 2 would otherwise still be holding for rollback.
   - Each request logs one JSON line: `{t_start,t_end,scenario,step,status,login_id,user,sub,claims:{login_ctx,tenant}}`.
   - `gate.sh <path>` reads the k6 lines + `out/events.jsonl` and prints a table. It exits non-zero on any failed rule:
     - **both paths**: 0 responses >= 500 or status 0 outside the declared 503 paths/window; reads 0 errors; claims present; per `user`, `sub` never changes over the run (catches lost first-broker-login creations).
-    - **same-minor**: >= 1 login with a hop before `switch` and the next hop after it, all succeeded; every refresh token issued before `switch` refreshes OK after it; 0 `invalid_grant` in total.
+    - **shared** (patch case): >= 1 login with a hop before `switch` and the next hop after it, all succeeded; every refresh token issued before `switch` refreshes OK after it; 0 `invalid_grant` in total.
     - **minor (lossy)**: refresh tokens issued before `copy_point` refresh OK after `switch`. `invalid_grant` happens only to sessions created in `[copy_point, switch]`, and each of those re-logins OK. After `replay_done`, every `logout_probe` gets `invalid_grant` (logged out stays logged out). 503 only on `/admin` + `/account` in the window. Prints `lossy_seconds`, `sessions_lost`, `relogins`, `logouts_replayed`, `users_replayed`, `resurrection_seconds` (time between `switch` and `replay_done` during which a logged-out session could still refresh on green; reported, not gated).
-  - Example: a synthetic file where one 502 lands 2 s after `switch` -> `gate.sh same-minor` exit 1, printing that line.
+  - Example: a synthetic file where one 502 lands 2 s after `switch` -> `gate.sh shared` exit 1, printing that line.
 - **Tests**: `scripts/test-gate.sh` feeds synthetic fixtures (`load/fixtures/*.jsonl`) -> expected exits:
-  - pass-same-minor -> 0
+  - pass-shared -> 0
   - 5xx -> 1
   - broken in-flight login -> 1
   - pass-lossy -> 0
@@ -253,17 +272,17 @@ which step 2 would otherwise still be holding for rollback.
   - `sub` changes for a user -> 1
   - `invalid_grant` on a pre-copy-point session -> 1
 - **Regression scope**: none
-- **Done**: fixtures green. A 5-minute run against blue with no switch -> `gate.sh same-minor` reports 0 errors (the switch-crossing rule is skipped when there is no `switch` event).
+- **Done**: fixtures green. A 5-minute run against blue with no switch -> `gate.sh shared` reports 0 errors (the switch-crossing rule is skipped when there is no `switch` event).
   The load rate is set from this baseline: Keycloak CPU must stay below ~60% of its limit (record rate + CPU in `load/RATE.md`),
   so an overload 5xx cannot pose as a switch failure.
 - **Don't touch**: providers/, config/
 - **Depends on**: 2, 3
 
-## Slice 5: same-minor switch (shared DB)
-- **Files**: create `scripts/switch-same-minor.sh`; edit `scripts/lib/kc.sh` (add `drain_color`, `kill_one`)
-- **Contract**: `switch-same-minor.sh <target_version> <provider_version>`
+## Slice 5: patch case (shared-DB switch)
+- **Files**: create `scripts/switch-shared.sh`, `scripts/demo.sh`, `scripts/reset.sh`, `cases.env`; edit `scripts/lib/kc.sh` (add `drain_color`, `kill_one`)
+- **Contract**: `switch-shared.sh <target_version> <provider_version>`; `demo.sh patch` = reset -> bootstrap blue 26.8.0 provider v1 -> load -> `switch-shared.sh 26.8.1 2` -> gate.
   0. Pre-flight: `kc.sh update-compatibility metadata` on the active color, then `check` with the target
-     image (`--features=rolling-updates:v2`). A non-zero exit aborts: the change is not same-minor-safe and must use the minor path.
+     image (`--features=rolling-updates:v2`). A non-zero exit aborts: the change is not shared-DB-safe and must use the lossy path.
   1. Deploy the idle color with the target image on `activeDb`, own cluster-name, `--wait`.
   2. `check-cluster.sh <idle>`: two separate JGroups views exist, each of size 3.
   3. Smoke on the idle color via its internal Service: login and claims show the new `login_ctx`.
@@ -272,17 +291,17 @@ which step 2 would otherwise still be holding for rollback.
   6. Graceful-delete one pod of each color, wait for Ready again (event `kill`).
   7. Keep the old color for `DRAIN_SECONDS=60`, then scale it to 0 (event `drained`).
   8. Optional `RUN_MAINTENANCE=1`: freeze -> `config.sh maintenance` -> unfreeze, measured like the minor path.
-- **Tests**: a full run under `load.sh` -> `gate.sh same-minor` exit 0. Negative control (run once and record in the README): the same switch WITHOUT `--features=stateless` must fail the in-flight-login rule. This proves the gate can tell the two apart.
+- **Tests**: `demo.sh patch` -> `gate.sh shared` exit 0. Negative control (run once and record in the README): the same switch WITHOUT `--features=stateless` must fail the in-flight-login rule. This proves the gate can tell the two apart.
 - **Regression scope**: Slices 1-4 checks
 - **Done**: gate green twice in a row (blue->green, green->blue).
 - **Don't touch**: providers/, load/k6 (bugs found there go back to Slice 4)
 - **Depends on**: 4
 
-## Slice 6: minor upgrade (per-color DB, lossy overlap + replay)
-- **Files**: create `scripts/switch-minor.sh`, `scripts/replay.sh`, `k8s/postgres/pg-replica.yaml.tpl`,
+## Slice 6: minor case (per-color DB, lossy overlap + replay)
+- **Files**: create `scripts/switch-lossy.sh`, `scripts/replay.sh`, `k8s/postgres/pg-replica.yaml.tpl`,
   `k8s/edge/{kc-maint.yaml,kc-freeze-ingress.yaml.tpl}`; edit `scripts/lib/kc.sh` (`freeze <paths>`,
   `unfreeze`, `wait_replica_lsn`, `promote_db`)
-- **Contract**: `switch-minor.sh <target_version>`
+- **Contract**: `switch-lossy.sh <target_version>` (shared by minor + major); `demo.sh minor` = reset -> bootstrap blue 26.7.5 -> load -> `switch-lossy.sh 26.8.1` -> `gate.sh lossy`.
   1. Create `pg-<n+1>` as a CNPG replica cluster of `activeDb` (streaming) and wait for it to be streaming.
      `externalClusters` must reference the source's `<db>-replication` (client cert) and `<db>-ca`
      secrets. That's the usual first failure; verify it against the CNPG replica-cluster docs.
@@ -311,7 +330,7 @@ which step 2 would otherwise still be holding for rollback.
   - Verify early in this slice: `partialImport` keeps the given user `id`. If it does not, the fallback is adding
     `/realms/demo/login-actions/first-broker-login` to the frozen paths for the window (brand-new users get
     ~1 min of 503 instead of a changed `sub`).
-- **Tests**: a full 26.7.5 -> 26.8.0 run under load -> `gate.sh minor` exit 0. The run prints `lossy_seconds`,
+- **Tests**: `demo.sh minor` (26.7.5 -> 26.8.1) -> `gate.sh lossy` exit 0. The run prints `lossy_seconds`,
   `sessions_lost`, `relogins`, `logouts_replayed`, `users_replayed`, `resurrection_seconds`. If the changelog
   count does not change, the README says the mechanism ran with a no-op migration.
   `scripts/test-replay.sh`: feed `replay.sh` a fixture log (2 logouts, 1 creation, 1 duplicate) against a running
@@ -321,19 +340,43 @@ which step 2 would otherwise still be holding for rollback.
 - **Don't touch**: providers/, load/
 - **Depends on**: 5 (shares kc.sh)
 
+## Slice 6b: major case (25.0.6 -> 26.8.1)
+- **Files**: edit `images/keycloak/Dockerfile` (build arg `KC_MAJOR`; the 25 build line is
+  `kc.sh build --db=postgres --cache=ispn --cache-stack=kubernetes --health-enabled=true --metrics-enabled=true --features=persistent-user-sessions`),
+  `providers/pom.xml` (profile `kc25`), `scripts/lib/kc.sh` (`deploy_color` picks `helm/values-kc25.yaml` + config-cli tag by major);
+  create `helm/values-kc25.yaml` (env `KEYCLOAK_ADMIN*`, `KC_CACHE_STACK=kubernetes`, `JAVA_OPTS_APPEND=-Djgroups.dns.query=<release>-headless.<ns>.svc.cluster.local`
+  pointing at the chart's ispn headless Service, no stateless/cluster-name env); edit `cases.env`
+- **Contract**: `demo.sh major` = reset -> bootstrap blue 25.0.6 (provider `-kc25`, config-cli `6.5.1-25`) -> load -> `switch-lossy.sh 26.8.1` -> `gate.sh lossy`.
+  Unchanged `switch-lossy.sh`: it must not branch on the major. Version differences live in values, the image and the config-cli tag only.
+  Example: `cases.env` line `major FROM=25.0.6 TO=26.8.1`.
+- **Tests**:
+  - `demo.sh major` -> `gate.sh lossy`.
+  - On 25 BEFORE the switch: a session survives a rolling restart of blue (proves `persistent-user-sessions` is really on; otherwise the copy carries no sessions).
+  - `config-cli 6.5.1-25` bootstrap + online pass `check-config.sh` on 25.0.6.
+- **Cross-major refresh tokens**: the lossy gate requires pre-copy-point sessions to refresh OK on green. If 26
+  rejects 25-issued refresh tokens, the gate fails. Do NOT relax the rule silently. Record the raw `invalid_grant`
+  response body, report it to the user and decide together (it would mean one silent mass re-login per major
+  upgrade: a property of Keycloak, not of this setup).
+- **Regression scope**: `demo.sh patch` and `demo.sh minor` still green (shared image/values code)
+- **Done**: gate green, or the cross-major token result documented with evidence and a decision.
+- **Don't touch**: `scripts/switch-lossy.sh`, `scripts/replay.sh`, load/
+- **Depends on**: 6
+
 ## Slice 7: Jenkins in compose
 - **Files**: fill `images/jenkins/Dockerfile` (FROM jenkins/jenkins:lts-jdk21, plugins via
   `jenkins-plugin-cli`: configuration-as-code, job-dsl, workflow-aggregator, git, timestamper; installs docker
   CLI, kind, kubectl, helm, jq, maven), `jenkins/casc.yaml`, `jenkins/jobs.groovy`, `Jenkinsfile`; edit `compose.yaml`
 - **Contract**:
   - The pipeline checks out `file:///repo` (`-Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true`) and runs on the built-in node. ponytail: no agents; add k8s/docker agents when builds need isolation.
-  - Stages: build provider + image -> `kind load` -> start load -> path script (`PATH_TYPE`) -> stop load -> gate -> archive `out/` (gate table, events, k6 summary).
-  - Example: build with `PATH_TYPE=same-minor TARGET_VERSION=26.8.1 PROVIDER_VERSION=2` -> SUCCESS, with artifact `out/gate.txt` showing 0 errors.
-- **Tests**: on a clean box, `docker compose up -d` lets `scripts/demo.sh` trigger the 3 builds in narrative order through the Jenkins REST API. All 3 succeed.
+  - Stages: build providers (both profiles) + images for the case's FROM/TO -> `kind load` -> reset -> bootstrap FROM ->
+    start load -> switch script for the case -> stop load -> gate -> archive `out/` (gate table, events, k6 summary).
+    The pipeline only calls `demo.sh`'s functions; no logic lives in the Jenkinsfile.
+  - Example: build with `CASE=patch` -> SUCCESS, with artifact `out/gate.txt` showing 0 errors.
+- **Tests**: on a clean box, `docker compose up -d` lets `scripts/demo.sh all --via-jenkins` trigger the 3 builds through the Jenkins REST API. All 3 succeed.
 - **Regression scope**: Slices 1-6 via the pipeline
 - **Done**: as Tests. Jenkins has no manual setup (JCasC only), and the admin password is generated into a compose secret.
 - **Don't touch**: scripts/ logic (Jenkins only orchestrates)
-- **Depends on**: 6
+- **Depends on**: 6b
 
 ## Slice 8: README + publish
 - **Files**: create `README.md` (narrative, architecture diagram, measured results table from a real run, the negative control, known limits), `LICENSE` (Apache-2.0)
@@ -341,16 +384,17 @@ which step 2 would otherwise still be holding for rollback.
 - **Depends on**: 7
 
 ## Parallelism
-The live cluster is one shared resource, so every slice that runs the cluster is serial: 1 -> 1b -> 2 -> 4 -> 5 -> 6 -> 7 -> 8.
+The live cluster is one shared resource, so every slice that runs the cluster is serial: 1 -> 1b -> 2 -> 4 -> 5 -> 6 -> 6b -> 7 -> 8.
 Slice 3's Java + theme work (mvn verify, no cluster) can run in parallel with Slice 2. Slice 1b's Spring app
 and tests (no cluster) can run in parallel with Slice 1. The Slice 4
 fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's Dockerfile/casc can be drafted in parallel with 5 and 6.
 
 ## Integration tests (owned by no slice; final review writes + runs)
-- Provider v1 on blue, v2 on green, same-minor switch: every login whose broker callback lands after `switch` has `login_ctx=v2`. Logins whose KC `/auth` hop was on blue and whose callback hop was on green also end with `v2` (the auth session continues on green).
+- Patch case, provider v1 on blue and v2 on green: every login whose broker callback lands after `switch` has `login_ctx=v2`. Logins whose KC `/auth` hop was on blue and whose callback hop was on green also end with `v2` (the auth session continues on green).
 - An online config change applied via green is visible on blue within 1 s (stateless invalidation across clusters).
 - After the minor path: the user count on green = the count on blue at `switch` (copy + replayed creations, nothing lost), and the same ids.
-- The refresh token from the first login of the whole demo (issued on 26.7.5, blue) still refreshes after both switches.
+- Per case: the refresh token from the first login of the warm-up (issued on FROM) still refreshes on TO after the switch (major: see the Slice 6b decision rule).
+- `demo.sh all`: the three gates pass in one run with resets in between (no state leaks from one case into the next).
 - `kubectl get pods -A`: no pod of either color has a JGroups view containing the other color.
 
 ## Known limits (state in README, don't build around)
@@ -362,6 +406,9 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
   Measured as `resurrection_seconds`.
 - Lossy only works because Keycloak holds no credentials. A realm with local passwords would lose password changes; use a strict freeze there.
 - `stateless` is a preview feature, and it roughly doubles DB load.
+- The major demo is 25 -> 26 because 27 does not exist yet. Swap `cases.env` to 26 -> 27 when it ships.
+  On 25, sessions survive the copy only because `persistent-user-sessions` (preview in 25) is on from the first start.
+  A real 25 deployment that never enabled it would lose ALL online sessions in a major upgrade (silent re-login for everyone).
 - Single host: all KinD "zones" are one machine, and clock skew between clusters (stateless needs < 10 s) cannot occur here.
 - Legacy IdP is 1 replica with in-memory sessions (stand-in; it is not what's under test).
 - Writes on the old color after a rollback flip are lost (no reverse replication).
