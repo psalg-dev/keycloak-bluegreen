@@ -6,13 +6,19 @@ cd "$(dirname "$0")/.."
 d=out/certs
 mkdir -p "$d"
 
+# Extensions spelled out, not left to openssl.cnf defaults: Python >= 3.13 verifies X509-strict and rejects a CA without
+# keyUsage. Made only when out/certs/ca.crt is missing: an older CA stays until out/certs is deleted and this script is
+# re-run (then restart Keycloak so it reloads its truststore), or the cluster is rebuilt with a fresh `up`.
 if [[ ! -f $d/ca.crt ]]; then
   openssl req -x509 -newkey rsa:3072 -nodes -days 825 -subj "/CN=kc-bluegreen demo CA" \
-    -keyout "$d/ca.key" -out "$d/ca.crt" 2>/dev/null
+    -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+    -addext 'subjectKeyIdentifier=hash' -keyout "$d/ca.key" -out "$d/ca.crt" 2>/dev/null
   openssl req -newkey rsa:2048 -nodes -subj "/CN=*.localtest.me" \
     -keyout "$d/tls.key" -out "$d/tls.csr" 2>/dev/null
   openssl x509 -req -in "$d/tls.csr" -CA "$d/ca.crt" -CAkey "$d/ca.key" -CAcreateserial -days 825 \
-    -extfile <(printf 'subjectAltName=DNS:*.localtest.me,DNS:localtest.me\nextendedKeyUsage=serverAuth') \
+    -extfile <(printf '%s\n' 'subjectAltName=DNS:*.localtest.me,DNS:localtest.me' 'extendedKeyUsage=serverAuth' \
+      'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' \
+      'subjectKeyIdentifier=hash' 'authorityKeyIdentifier=keyid') \
     -out "$d/tls.crt" 2>/dev/null
 fi
 

@@ -17,12 +17,10 @@ kubectl -n ingress-nginx port-forward --address 127.0.0.1 svc/ingress-nginx-cont
 pf=$!
 bundle=$(mktemp)
 trap 'kill $pf 2>/dev/null; rm -f "$bundle"' EXIT
-# Trust: public CAs (kcwarden asks GitHub for the latest Keycloak) + the ingress certificate from the cluster as anchor,
-# NOT the demo CA: Python >= 3.13 verifies X509-strict and rejects it ("CA cert does not include key usage extension";
-# scripts/certs.sh makes it without keyUsage). Python also sets partial-chain, so the leaf alone is a valid anchor.
-# ponytail: swap the leaf for "$(ca_file)" once certs.sh adds keyUsage=critical,keyCertSign,cRLSign to the CA.
-{ cat /etc/ssl/certs/ca-certificates.crt
-  kubectl -n "$NS" get secret localtest-tls -o jsonpath='{.data.tls\.crt}' | base64 -d; } > "$bundle"
+# Trust: public CAs (kcwarden asks GitHub for the latest Keycloak) + the demo CA (Secret demo-ca). Python >= 3.13
+# verifies X509-strict: a demo CA made before scripts/certs.sh set keyUsage is rejected ("CA cert does not include key
+# usage extension"); see certs.sh for regenerating it.
+cat /etc/ssl/certs/ca-certificates.crt "$(ca_file)" > "$bundle"
 export REQUESTS_CA_BUNDLE=$bundle
 KCWARDEN_CLIENT_SECRET=$(kubectl -n "$NS" get secret kc-config-cli -o jsonpath='{.data.secret}' | base64 -d)
 export KCWARDEN_CLIENT_SECRET # read by kcwarden from env, never on a command line
