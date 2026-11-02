@@ -29,8 +29,32 @@ passwords). A lost session costs one silent redirect. Two kinds of lost write ar
 
 Strict write-freeze variant (503 on login/token during migration): designed earlier, not built (lossy chosen 2026-11-02).
 
+**Two networks (mirrors prod, user 2026-11-02)**. This supersedes any single `legacy` alias / `kc.localtest.me` /
+`legacy.localtest.me` mention below.
+| Network | Keycloak host (hostname-strict=false) | Legacy IdP host | Keycloak IdP alias |
+|---|---|---|---|
+| net1 | `kc-net1.localtest.me/keycloak` | `legacy-net1.localtest.me` | `legacy-net1` |
+| net2 | `kc-net2.localtest.me/keycloak` | `legacy-net2.localtest.me` | `legacy-net2` |
+- One legacy IdP instance serves both hosts; its issuer follows the host (`https://legacy-netN.localtest.me`).
+  One client `keycloak-broker` (secret in Secret `legacy-broker` in ns `keycloak`, key `client-secret`), redirect URI per pair:
+  `https://kc-netN.localtest.me/keycloak/realms/demo/broker/legacy-netN/endpoint`. PKCE required.
+  Its id_token carries `sub`=`preferred_username`=`userNNNN`, `email`=`userNNNN@legacy.example`, `tenant`=`t<NNNN % 10>`.
+- The issuer must stay stable to the outside world: exactly one issuer per Keycloak host, identical on blue and green.
+  Enforced by the ingress (routes only the two hosts, overwrites X-Forwarded-Host) plus the chart NetworkPolicy: only
+  ingress-nginx, the release's own pods and pods labelled `kc-<color>-keycloak-client: "true"` reach Keycloak directly.
+  EVERY in-cluster job that talks to a color's Service directly (config-cli, seed, replay, smoke-direct) MUST carry
+  that label, or it gets no connection.
+- The same person can arrive via either network: first-broker-login flow `first-broker-auto-link` = Create User If
+  Unique (ALTERNATIVE) + Automatically Set Existing User (ALTERNATIVE), on both IdP configs. A net2 login of a user
+  linked via net1 adds a second federated link to the SAME user (same id, same `sub`).
+  Auto-links written on blue in a lossy window are simply redone on the next login via green (same user), so they are
+  NOT replayed. Only brand-new user creations are.
+- A token issued via net1 is only valid at net1 (issuer differs). k6 keeps each VU on one network per session.
+- Browser-like clients must send `Accept: text/html` to the legacy IdP; without it Spring answers 401 instead of
+  redirecting to /login (found in Slice 1b).
+
 Users: the legacy IdP has 5k users. Keycloak has users 1-4000 pre-linked (federated identity
-`legacy`); 4001-5000 hit first-broker-login on their first login (exercises the creation-replay path).
+`legacy-net1`); 4001-5000 hit first-broker-login on their first login (exercises the creation-replay path).
 
 Demos are STANDALONE (user's choice): `scripts/demo.sh <patch|minor|major|all>`.
 - Each case starts with `scripts/reset.sh`: uninstall both colors, delete every `pg-*`, delete the `load` Jobs, and recreate `pg-1`.
@@ -120,8 +144,9 @@ Kubeconfig via `kind get kubeconfig --internal`.
 - **bootstrap**: first install only. With the temporary bootstrap admin (`KC_BOOTSTRAP_ADMIN_*`),
   creates master client `config-cli` (client_credentials, realm `admin` role) and the empty `demo`
   realm. The Job no-ops if realm `demo` exists. Later stages authenticate as `config-cli`.
-- **online**: backward-compatible, applied while traffic flows on the shared DB: identity provider
-  `legacy` (OIDC, client `keycloak-broker`, sync mode FORCE, mappers `tenant` attr), clients, client
+- **online**: backward-compatible, applied while traffic flows on the shared DB: identity providers
+  `legacy-net1` + `legacy-net2` (OIDC, client `keycloak-broker`, PKCE, sync mode FORCE, mapper `tenant` claim -> attr,
+  first-broker-login flow `first-broker-auto-link`), clients, client
   scopes (`tenant`), mappers, roles, groups, theme selection, event listeners, additive flows.
 - **maintenance**: breaking changes (rebind browser flow, delete/rename clients or scopes).
   On the minor/major path it runs against green's own DB before the switch, which costs no extra downtime.
@@ -197,7 +222,8 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - **Files**: create `legacy-idp/pom.xml`, `legacy-idp/src/main/java/demo/legacy/{LegacyIdpApplication,SecurityConfig,Users}.java`,
   `legacy-idp/src/main/resources/application.yaml`, `legacy-idp/src/test/java/demo/legacy/*Test.java`,
   `images/legacy-idp/Dockerfile`, `k8s/legacy/{deployment.yaml,ingress.yaml}`; edit `scripts/up.sh` (build, load, apply)
-- **Contract**: issuer `https://legacy.localtest.me`. Users `user0001`..`user5000`, password from env
+- **DONE 3f81fa8** (two hosts, see "Two networks"; Boot auto-config from application.yaml + users and claims beans).
+- **Contract**: issuer follows the host, `https://legacy-netN.localtest.me`. Users `user0001`..`user5000`, password from env
   `LEGACY_USER_PASSWORD`, encoded ONCE at startup and shared by all users. Claim `sub` = username,
   attribute claim `tenant` = `t<n % 10>`. Registered client `keycloak-broker` (confidential, auth code + PKCE,
   redirect `https://kc.localtest.me/keycloak/realms/demo/broker/legacy/endpoint`). Form login, SSO session 8h.
@@ -221,8 +247,11 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
     leaf key/value in `config/<stage>/*.yaml` appears in the export (jq). This is the dropped-field check.
   - Example: `config.sh online blue && check-config.sh online` -> exit 0. Corrupting a value in the export -> exit 1, naming the path.
 - **Tests**: re-running every stage twice is a no-op (second run's admin-event count = 0).
-  `seed-users.sh 4000` -> `GET /admin/realms/demo/users/count` = 4000, each linked to `legacy`.
-  A browser login as `user0042` via `kc_idp_hint=legacy` lands without first-broker-login; `user4500` goes through it.
+  `seed-users.sh 4000` -> `GET /admin/realms/demo/users/count` = 4000, each linked to `legacy-net1`.
+  A login as `user0042` via `kc_idp_hint=legacy-net1` lands without first-broker-login. The same user via net2 ends up
+  as the same user id with 2 federated links. `user4500` goes through creation.
+  Keycloak trusts the demo CA for the broker back channel: chart `trustedCertsExistingSecret: demo-ca`.
+  Config-cli Job pods carry label `kc-<color>-keycloak-client: "true"` (NetworkPolicy).
 - **Regression scope**: Slice 1 check-cluster
 - **Done**: bootstrap -> online -> maintenance on blue, all checks green; the bootstrap admin is no longer needed by later stages.
 - **Don't touch**: providers/, images/
@@ -234,7 +263,8 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
   `providers/src/main/resources/META-INF/services/*`, `providers/src/test/java/demo/kc/*Test.java`,
   `themes/demo/login/{theme.properties,login.ftl,logout-confirm.ftl,error.ftl,resources/css/demo.css}`. Edit `images/keycloak/Dockerfile` (COPY jar + theme before `kc.sh build`).
 - **Contract**: `PROVIDER_VERSION` (maven property, default `1`) is baked into the authenticator's note value.
-  Flows (config lives in Slice 2): `browser-demo` = cookie -> identity-provider-redirector (default `legacy`);
+  Flows (config lives in Slice 2): `browser-demo` = cookie -> identity-provider-redirector (no default; the client
+  passes `kc_idp_hint=legacy-netN` matching the host it is on);
   `post-broker-demo` = `LoginContextAuthenticator` (the IdP's post-broker-login flow). The authenticator
   sets USER SESSION note `login_ctx=v<PROVIDER_VERSION>` (survives refresh); `LoginContextMapper` emits it.
   Example: a broker login with provider v1 -> the access token has `"login_ctx":"v1"` and `"tenant":"t2"` for
@@ -260,6 +290,8 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
       6. `Location` code
       7. KC `/token`
 
+      Each VU picks network net1|net2 (50/50) for its whole session: base `https://kc-netN.localtest.me/keycloak`,
+      `kc_idp_hint=legacy-netN`, and `Accept: text/html` on browser hops.
       80% of logins use users 1-4000 (linked), 20% use 4001-5000 (new on first login). Each VU keeps
       its cookie jar, so a re-login after a lost session is silent via the legacy SSO (counted as `relogin`).
     - `refresh`: hold a refresh token, refresh every 5 s. On `invalid_grant`, do a silent re-login and count it.
@@ -267,7 +299,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
     - `reads`: discovery + JWKS every 1 s.
   - Each request logs one JSON line: `{t_start,t_end,scenario,step,status,login_id,user,sub,claims:{login_ctx,tenant}}`.
   - `gate.sh <path>` reads the k6 lines + `out/events.jsonl` and prints a table. It exits non-zero on any failed rule:
-    - **both paths**: 0 responses >= 500 or status 0 outside the declared 503 paths/window; reads 0 errors; claims present; per `user`, `sub` never changes over the run (catches lost first-broker-login creations).
+    - **both paths**: every token's `iss` equals `https://kc-netN.localtest.me/keycloak/realms/demo` for the network it was requested on, before and after the switch (issuer stable to the outside world); 0 responses >= 500 or status 0 outside the declared 503 paths/window; reads 0 errors; claims present; per `user`, `sub` never changes over the run (catches lost first-broker-login creations).
     - **shared** (patch case): >= 1 login with a hop before `switch` and the next hop after it, all succeeded; every refresh token issued before `switch` refreshes OK after it; 0 `invalid_grant` in total.
     - **minor (lossy)**: refresh tokens issued before `copy_point` refresh OK after `switch`. `invalid_grant` happens only to sessions created in `[copy_point, switch]`, and each of those re-logins OK. After `replay_done`, every `logout_probe` gets `invalid_grant` (logged out stays logged out). 503 only on `/admin` + `/account` in the window. Prints `lossy_seconds`, `sessions_lost`, `relogins`, `logouts_replayed`, `users_replayed`, `resurrection_seconds` (time between `switch` and `replay_done` during which a logged-out session could still refresh on green; reported, not gated).
   - Example: a synthetic file where one 502 lands 2 s after `switch` -> `gate.sh shared` exit 1, printing that line.
@@ -335,7 +367,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
   10. Drain 15 s (in-flight requests on blue finish), then `replay.sh` again with the same start (pass 2) and `event replay_done`.
   11. `unfreeze`, `event window_end`.
   12. Keep the old color + old DB for `ROLLBACK_HOLD=10m`, with no traffic. Rollback = `set_active` back, which loses green's writes since `copy_point` (documented).
-- `replay.sh <from> <to> <since>`:
+- `replay.sh <from> <to> <since>` (its in-cluster calls carry label `kc-<to>-keycloak-client: "true"`):
   - Collect `kubectl logs --since-time` from EVERY `<from>` pod, keeping lines with `"replay":true`. If any `<from>` pod's
     restartCount changed since `<since>`, fail loudly (its logs are gone).
   - Apply on `<to>` via its internal Service as the `config-cli` client:
