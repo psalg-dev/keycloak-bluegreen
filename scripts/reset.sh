@@ -9,7 +9,7 @@ kubectl -n load delete job --all --ignore-not-found >/dev/null 2>&1 || true
 for c in blue green; do helm -n "$NS" uninstall "kc-$c" --wait >/dev/null 2>&1 || true; done
 kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null
 kubectl -n "$NS" delete job -l app=config-cli --ignore-not-found >/dev/null
-kubectl -n "$NS" delete cluster.postgresql.cnpg.io --all --wait >/dev/null
+delete_dbs
 kubectl -n "$NS" delete configmap kc-state --ignore-not-found >/dev/null
 rm -f out/events.jsonl out/k6.jsonl
 create_db pg-1

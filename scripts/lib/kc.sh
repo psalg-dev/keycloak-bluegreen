@@ -173,3 +173,15 @@ admin_direct_start() {
   die "port-forward to kc-$1 failed"
 }
 admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE ADMIN_PF; ADMIN_TOKEN=; }
+
+# delete_dbs: delete every CNPG cluster AND wait until their children (pods, PVCs, secrets) are gone. Recreating a
+# cluster under the same name while the old pods still terminate makes CNPG count them, mark the new cluster
+# initialized, then find no PVCs -> "unrecoverable" (2026-11-02; `delete --wait` returns before GC is done).
+delete_dbs() {
+  kubectl -n "$NS" delete cluster.postgresql.cnpg.io --all --cascade=foreground --wait --timeout=600s >/dev/null
+  local _; for _ in $(seq 150); do
+    [[ -z $(kubectl -n "$NS" get pod,pvc,secret -l cnpg.io/cluster -o name) ]] && return
+    sleep 2
+  done
+  die "old CNPG pods/PVCs/secrets still present"
+}
