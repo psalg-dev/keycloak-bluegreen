@@ -1,0 +1,1 @@
+{"t_start":"2026-11-02T22:52:12.300Z","t_end":"2026-11-02T22:52:12.368Z","scenario":"login","step":"login_token","status":200,"error":null,"login_id":"6-9","user":"user4802","net":"net2","sub":"5f0c2a7e-91d3-4b6a-8e2f-00000004802f","iss":"https://kc-net2.localtest.me/keycloak/realms/demo","claims":{"login_ctx":"v1","tenant":"t2"}}

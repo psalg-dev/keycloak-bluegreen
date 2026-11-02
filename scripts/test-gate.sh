@@ -18,6 +18,16 @@ pass-lossy         |lossy |lossy-base                                       |los
 probe-after-replay |lossy |lossy-base lossy-probe-ok                       |lossy |1|logout_after_replay=FAIL
 pre-copy-grant     |lossy |lossy-base lossy-pre-copy-ig                    |lossy |1|refresh_pre_copy=FAIL invalid_grant_in_window=FAIL
 sub-change         |lossy |lossy-base lossy-sub-change                     |lossy |1|sub_stable=FAIL
+pass-shared-rb     |shared-rollback|shared-rb-base shared-rb-inflight        |shared-rollback|0|inflight_login=PASS inflight_login_rollback=PASS refresh_blue_after_rollback=PASS refresh_green_after_rollback=PASS
+shared-rb-5xx      |shared-rollback|shared-rb-base shared-rb-inflight shared-rb-5xx|shared-rollback|1|no_5xx=FAIL
+shared-rb-inflight |shared-rollback|shared-rb-base shared-rb-inflight-broken |shared-rollback|1|inflight_login_rollback=FAIL inflight_login=PASS
+skip-no-rollback   |shared-rollback|shared-base shared-inflight-ok          |shared|0|inflight_login_rollback=SKIP refresh_green_after_rollback=SKIP
+pass-lossy-rb      |lossy-rollback |lossy-rb-base                            |lossy-rollback|0|invalid_grant_phases=PASS logout_after_replay=PASS logout_after_rollback_replay=PASS refresh_pre_copy_after_rollback=PASS green_users_sub_kept=PASS relogin_ok=PASS
+lossy-rb-pre-copy  |lossy-rollback |lossy-rb-base lossy-rb-pre-copy-ig       |lossy-rollback|1|refresh_pre_copy=FAIL refresh_pre_copy_after_rollback=FAIL invalid_grant_phases=FAIL
+lossy-rb-probe-ok  |lossy-rollback |lossy-rb-base lossy-rb-probe-ok          |lossy-rollback|1|logout_after_rollback_replay=FAIL
+lossy-rb-sub       |lossy-rollback |lossy-rb-base lossy-rb-sub-change        |lossy-rollback|1|sub_stable=FAIL green_users_sub_kept=FAIL
+lossy-rb-no-relogin|lossy-rollback |lossy-rb-base lossy-rb-no-relogin        |lossy-rollback|1|relogin_ok=FAIL invalid_grant_phases=PASS
+skip-lossy-no-rb   |lossy-rollback |lossy-base                               |lossy |0|invalid_grant_phases=SKIP logout_after_replay=SKIP logout_after_rollback_replay=SKIP green_users_sub_kept=SKIP
 '
 
 bad=0
