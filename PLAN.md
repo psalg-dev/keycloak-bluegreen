@@ -417,6 +417,20 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - **Don't touch**: `scripts/switch-lossy.sh`, `scripts/replay.sh`, load/
 - **Depends on**: 6
 
+## Slice 6r: rollback drills (user, 2026-11-03)
+- **Files**: `scripts/rollback.sh`, `KEEP_OLD=true` in both switch scripts (old color stays up for the hold),
+  `kc-state.previous{Color,Db,Version}` (set_active), cases `patch-rollback` / `minor-rollback` in cases.env,
+  gate modes `shared-rollback` / `lossy-rollback` (subagent, branch gate-rollback).
+- **shared**: flip back, same DB, nothing lost. Same zero-downtime gate as forward, across BOTH flips.
+- **lossy**: back to the old color AND its old DB (old schema; a migrated schema cannot be downgraded). Green's writes
+  since the switch are lost, except logouts + user creations, which are reverse-replayed green -> blue before and
+  after the flip (else a logout on green resurrects the session on blue, and a user created on green comes back with a
+  new id). Admin/account frozen during the rollback window.
+- Past the hold, the old color is gone and (lossy) its DB is stale: rollback = fix forward with a new switch.
+  rollback.sh refuses when the old color isn't running.
+- Events: rollback_start, rollback (the flip), lossy: rollback_window_start, reverse `replay` (from=new),
+  rollback_replay_done, rollback_window_end; then drained.
+
 ## Slice 7: Jenkins in compose
 - **Files**: fill `images/jenkins/Dockerfile` (FROM jenkins/jenkins:lts-jdk21, plugins via
   `jenkins-plugin-cli`: configuration-as-code, job-dsl, workflow-aggregator, git, timestamper; installs docker
