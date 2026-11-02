@@ -75,9 +75,9 @@ topologySpreadConstraints:
     labelSelector:
       matchLabels:
         app.kubernetes.io/instance: "{{ .Release.Name }}"
-pdb:
+pdb: # mirrors prod: 3 AZs, 2 guaranteed replicas
   create: true
-  maxUnavailable: 1
+  minAvailable: 2
 
 startupProbe:
   enabled: false

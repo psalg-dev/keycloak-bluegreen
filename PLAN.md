@@ -166,7 +166,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - caveman + ponytail. Bash only (`set -euo pipefail`). No script over ~150 lines; shared functions go in `scripts/lib/kc.sh`.
 - Production realism, not dev mode:
   - `kc.sh start --optimized`, `KC_HOSTNAME=https://kc.localtest.me/keycloak`, hostname strict, `KC_PROXY_HEADERS=xforwarded`, TLS at ingress (CA + cert from `scripts/certs.sh`, openssl).
-  - Per pod: requests 1 CPU / 1.5Gi, limit 2Gi. Anti-affinity + topologySpread across zones. PDB `maxUnavailable: 1`.
+  - Per pod: requests 1 CPU / 1.5Gi, limit 2Gi. Anti-affinity + topologySpread across zones. PDB `minAvailable: 2` (mirrors prod: 3 AZs, 2 guaranteed replicas).
   - Readiness `GET /health/ready` on management port 9000. Liveness `/health/live` (period 10s, not the chart's 1s).
   - `preStop: sleep 15`, `terminationGracePeriodSeconds: 60`.
 - Secrets are generated at `up` (random), stored as k8s Secrets, never committed. Repo is public.
@@ -297,6 +297,14 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
   4. `config.sh online <idle>`. Thanks to stateless invalidation, the active color sees the change within 1 s (asserted).
   5. `event switch`, then `set_active <idle>`.
   6. Graceful-delete one pod of each color, wait for Ready again (event `kill`).
+  6z. Optional `ZONE_LOSS=1|primary` (reported, NOT gated). `docker stop` one KinD worker mid-switch (event `zone_down`),
+      and restart it after 120 s (event `zone_up`).
+      - Each color drops to exactly its 2 guaranteed replicas. The replacement stays Pending because topologySpread
+        DoNotSchedule + hard anti-affinity forbid doubling up. Assert that, plus PDB `minAvailable: 2` holding.
+      - `1` = the worker WITHOUT the CNPG primary: isolates Keycloak's behaviour on zone loss.
+      - `primary` = the worker WITH it: adds a CNPG failover.
+      - Report 5xx count, window and the pod that answered (edge access log).
+      - Not gated: an abruptly lost node kills in-flight non-idempotent POSTs (502), and no edge can hide that.
   7. Keep the old color for `DRAIN_SECONDS=60`, then scale it to 0 (event `drained`).
   8. Optional `RUN_MAINTENANCE=1`: freeze -> `config.sh maintenance` -> unfreeze, measured like the minor path.
 - **Tests**: `demo.sh patch` -> `gate.sh shared` exit 0. Negative control (run once and record in the README): the same switch WITHOUT `--features=stateless` must fail the in-flight-login rule. This proves the gate can tell the two apart.
