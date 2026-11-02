@@ -1,0 +1,1 @@
+{"t_start":"2026-11-02T22:21:32.460Z","t_end":"2026-11-02T22:21:32.530Z","scenario":"logout","step":"logout_probe","status":200,"error":null,"login_id":"5-1","user":"user0400","net":"net1","sub":"91c4e2a0-6d5f-4b17-8e9a-000000000400","iss":"https://kc-net1.localtest.me/keycloak/realms/demo","claims":{"login_ctx":"v1","tenant":"t0"}}
