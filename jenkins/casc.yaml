@@ -1,0 +1,19 @@
+# JCasC. ${jenkins-admin-password} resolves from the compose secret file /run/secrets/jenkins-admin-password.
+jenkins:
+  systemMessage: "kc-bluegreen demo. Configured by JCasC (jenkins/casc.yaml); UI changes are lost on restart."
+  numExecutors: 2
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: ${jenkins-admin-password}
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+unclassified:
+  location:
+    url: http://localhost:8081/
+jobs:
+  - file: /repo/jenkins/jobs.groovy
