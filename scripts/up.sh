@@ -56,6 +56,8 @@ kubectl apply -f k8s/edge/ >/dev/null
 if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then
   deploy_color blue "$FROM" pg-1 1
   set_active blue pg-1 "$FROM"
+  for stage in bootstrap online maintenance; do scripts/config.sh "$stage" blue; done # first install: no traffic yet
+  scripts/seed-users.sh 4000
 else
   set_active "$(state activeColor)" "$(state activeDb)" "$(state version)" # k8s/edge/ hard-codes blue; state wins
 fi

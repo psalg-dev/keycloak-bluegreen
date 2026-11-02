@@ -1,0 +1,8 @@
+{
+  "realm": "demo",
+  "enabled": true,
+  "ssoSessionIdleTimeout": 7200,
+  "ssoSessionMaxLifespan": 36000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": false
+}

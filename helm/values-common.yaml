@@ -20,6 +20,7 @@ auth:
   passwordSecretKey: password
 
 httpEnabled: true # TLS terminates at ingress-nginx
+trustedCertsExistingSecret: demo-ca # broker back channel to https://legacy-netN.localtest.me (demo CA)
 # Context path. Must equal the image's build-time --http-relative-path exactly (no trailing slash), or
 # `start --optimized` exits 2. The chart's own probes would append "realms/master" to it; we use custom probes.
 httpRelativePath: /keycloak

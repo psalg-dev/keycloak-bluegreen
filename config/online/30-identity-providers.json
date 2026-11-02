@@ -1,0 +1,63 @@
+{
+  "realm": "demo",
+  "identityProviders": [
+    {
+      "alias": "legacy-net1",
+      "displayName": "Legacy (net1)",
+      "providerId": "oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "firstBrokerLoginFlowAlias": "first-broker-auto-link",
+      "config": {
+        "issuer": "https://legacy-net1.localtest.me",
+        "authorizationUrl": "https://legacy-net1.localtest.me/oauth2/authorize",
+        "tokenUrl": "https://legacy-net1.localtest.me/oauth2/token",
+        "userInfoUrl": "https://legacy-net1.localtest.me/userinfo",
+        "jwksUrl": "https://legacy-net1.localtest.me/oauth2/jwks",
+        "logoutUrl": "https://legacy-net1.localtest.me/connect/logout",
+        "useJwksUrl": "true",
+        "validateSignature": "true",
+        "clientId": "keycloak-broker",
+        "clientSecret": "$(env:LEGACY_BROKER_SECRET)",
+        "clientAuthMethod": "client_secret_basic",
+        "pkceEnabled": "true",
+        "pkceMethod": "S256",
+        "defaultScope": "openid profile email",
+        "syncMode": "FORCE"
+      }
+    },
+    {
+      "alias": "legacy-net2",
+      "displayName": "Legacy (net2)",
+      "providerId": "oidc",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "firstBrokerLoginFlowAlias": "first-broker-auto-link",
+      "config": {
+        "issuer": "https://legacy-net2.localtest.me",
+        "authorizationUrl": "https://legacy-net2.localtest.me/oauth2/authorize",
+        "tokenUrl": "https://legacy-net2.localtest.me/oauth2/token",
+        "userInfoUrl": "https://legacy-net2.localtest.me/userinfo",
+        "jwksUrl": "https://legacy-net2.localtest.me/oauth2/jwks",
+        "logoutUrl": "https://legacy-net2.localtest.me/connect/logout",
+        "useJwksUrl": "true",
+        "validateSignature": "true",
+        "clientId": "keycloak-broker",
+        "clientSecret": "$(env:LEGACY_BROKER_SECRET)",
+        "clientAuthMethod": "client_secret_basic",
+        "pkceEnabled": "true",
+        "pkceMethod": "S256",
+        "defaultScope": "openid profile email",
+        "syncMode": "FORCE"
+      }
+    }
+  ],
+  "identityProviderMappers": [
+    { "name": "tenant", "identityProviderAlias": "legacy-net1", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": { "claim": "tenant", "user.attribute": "tenant", "syncMode": "INHERIT" } },
+    { "name": "tenant", "identityProviderAlias": "legacy-net2", "identityProviderMapper": "oidc-user-attribute-idp-mapper",
+      "config": { "claim": "tenant", "user.attribute": "tenant", "syncMode": "INHERIT" } }
+  ]
+}

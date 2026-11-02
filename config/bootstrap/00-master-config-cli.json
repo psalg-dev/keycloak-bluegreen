@@ -1,0 +1,23 @@
+{
+  "realm": "master",
+  "clients": [
+    {
+      "clientId": "config-cli",
+      "description": "keycloak-config-cli (online/maintenance stages) and admin scripts",
+      "enabled": true,
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "secret": "$(env:KC_CONFIG_CLI_SECRET)"
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-config-cli",
+      "enabled": true,
+      "serviceAccountClientId": "config-cli",
+      "realmRoles": ["admin"]
+    }
+  ]
+}
