@@ -338,7 +338,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
       - Report 5xx count, window and the pod that answered (edge access log).
       - Not gated: an abruptly lost node kills in-flight non-idempotent POSTs (502), and no edge can hide that.
   7. Keep the old color for `DRAIN_SECONDS=60`, then scale it to 0 (event `drained`).
-  8. Optional `RUN_MAINTENANCE=1`: freeze -> `config.sh maintenance` -> unfreeze, measured like the minor path.
+  8. Optional `RUN_MAINTENANCE=true` (Jenkins boolean param; also accept `1`): freeze -> `config.sh maintenance` -> unfreeze, measured like the minor path.
 - **Tests**: `demo.sh patch` -> `gate.sh shared` exit 0. Negative control (run once and record in the README): the same switch WITHOUT `--features=stateless` must fail the in-flight-login rule. This proves the gate can tell the two apart.
 - **Regression scope**: Slices 1-4 checks
 - **Done**: gate green twice in a row (blue->green, green->blue).
@@ -372,7 +372,12 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
     restartCount changed since `<since>`, fail loudly (its logs are gone).
   - Apply on `<to>` via its internal Service as the `config-cli` client:
     - LOGOUT -> `DELETE /admin/realms/demo/sessions/{sessionId}` (404 = fine)
-    - user creation -> `partialImport` `{ifResourceExists: SKIP, users:[{id, username, email, attributes, federatedIdentities, enabled:true}]}`
+    - user creation = `REGISTER` with detail `identity_provider` (NOT `IDENTITY_PROVIDER_FIRST_LOGIN`, which also fires on
+      auto-link; found in Slice 3) -> `partialImport` `{ifResourceExists: SKIP, users:[{id, username, email, attributes, federatedIdentities, enabled:true}]}`
+    - `REVOKE_GRANT` (token revocation endpoint): on 26 it carries `sessionId` -> DELETE that session; on **25 it has
+      none** (25 revokes the client from ALL the user's sessions) -> replay as `DELETE /users/{userId}/consents/{clientId}`
+      plus logging out that user's sessions for the client (conservative superset).
+    - The line's `realmId` is the realm UUID, not `demo`.
   - Idempotent: the window start is set early on purpose, and running it twice is a no-op.
   - Prints the counts.
   - Verify early in this slice: `partialImport` keeps the given user `id`. If it does not, the fallback is adding
@@ -390,7 +395,9 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 
 ## Slice 6b: major case (25.0.6 -> 26.8.1)
 - **Files**: edit `images/keycloak/Dockerfile` (build arg `KC_MAJOR`; the 25 build line is
-  `kc.sh build --db=postgres --cache=ispn --cache-stack=kubernetes --health-enabled=true --metrics-enabled=true --features=persistent-user-sessions`),
+  `kc.sh build --db=postgres --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions`.
+  On 25.0.6 `--cache`/`--cache-stack` are RUNTIME options: `kc.sh build` rejects them with exit 2 (found in Slice 3),
+  so they go in env (`KC_CACHE=ispn`, `KC_CACHE_STACK=kubernetes`)),
   `providers/pom.xml` (profile `kc25`), `scripts/lib/kc.sh` (`deploy_color` picks `helm/values-kc25.yaml` + config-cli tag by major);
   create `helm/values-kc25.yaml` (env `KEYCLOAK_ADMIN*`, `KC_CACHE_STACK=kubernetes`, `JAVA_OPTS_APPEND=-Djgroups.dns.query=<release>-headless.<ns>.svc.cluster.local`
   pointing at the chart's ispn headless Service, no stateless/cluster-name env); edit `cases.env`
