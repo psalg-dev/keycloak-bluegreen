@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
-# smoke.sh: from inside the cluster, via the public URL (CoreDNS rewrite -> ingress -> kc-active), with TLS verified
-# against the demo CA: discovery issuer + an admin token for the bootstrap admin.
+# smoke.sh: from inside the cluster, via the public URLs (CoreDNS rewrite -> ingress -> kc-active), TLS verified against
+# the demo CA. Per network host: discovery issuer follows the host, a spoofed X-Forwarded-Host cannot change it,
+# and the bootstrap admin gets a token.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
 
-base=https://kc.localtest.me/keycloak
+hosts=(kc-net1.localtest.me kc-net2.localtest.me)
 pw=$(kubectl -n "$NS" get secret kc-bootstrap-admin -o jsonpath='{.data.password}' | base64 -d)
 pod=smoke-$RANDOM
-# The password goes in on stdin, never on a command line; $PW expands in the pod's shell.
+# Pod prints "<key> <one-line json>" per check; parsing happens here with jq. Password goes in on stdin only.
 # shellcheck disable=SC2016
+script='read -r PW; for h in '"${hosts[*]}"'; do b=https://$h/keycloak/realms/master; c="curl -s --cacert /ca/ca.crt"
+  echo "$h $($c $b/.well-known/openid-configuration)"
+  echo "$h-spoof $($c -H "X-Forwarded-Host: evil.example" $b/.well-known/openid-configuration)"
+  echo "$h-token $($c -d grant_type=password -d client_id=admin-cli -d username=temp-admin --data-urlencode password="$PW" $b/protocol/openid-connect/token)"
+done'
 out=$(kubectl -n "$NS" run "$pod" --rm -i --restart=Never --quiet --image=curlimages/curl:8.23.0 \
-  --overrides='{"spec":{"volumes":[{"name":"ca","secret":{"secretName":"demo-ca"}}],"containers":[{"name":"'"$pod"'","image":"curlimages/curl:8.23.0","stdin":true,"stdinOnce":true,
-    "command":["sh","-c","read -r PW; curl -sf --cacert /ca/ca.crt '"$base"'/realms/master/.well-known/openid-configuration; echo; curl -sf --cacert /ca/ca.crt -d grant_type=password -d client_id=admin-cli -d username=temp-admin --data-urlencode password=\"$PW\" '"$base"'/realms/master/protocol/openid-connect/token"],
-    "volumeMounts":[{"name":"ca","mountPath":"/ca"}]}]}}' <<<"$pw")
+  --overrides="$(jq -nc --arg n "$pod" --arg s "$script" '{spec:{volumes:[{name:"ca",secret:{secretName:"demo-ca"}}],
+    containers:[{name:$n,image:"curlimages/curl:8.23.0",stdin:true,stdinOnce:true,command:["sh","-c",$s],
+    volumeMounts:[{name:"ca",mountPath:"/ca"}]}]}}')" <<<"$pw")
 
-issuer=$(head -1 <<<"$out" | jq -r .issuer)
-[[ $issuer == "$base/realms/master" ]] || die "issuer from inside cluster: $issuer"
-tail -1 <<<"$out" | jq -e '.access_token | length > 100' >/dev/null || die "no admin token"
-log "OK smoke: in-cluster issuer $issuer, admin token issued"
+val() { awk -v k="$1" '$1==k {sub(/^[^ ]+ /, ""); print}' <<<"$out" | jq -r "$2" 2>/dev/null || true; }
+for h in "${hosts[@]}"; do
+  want="https://$h/keycloak/realms/master"
+  got=$(val "$h" .issuer) spoof=$(val "$h-spoof" .issuer) tok=$(val "$h-token" '.access_token | length')
+  [[ $got == "$want" ]] || die "$h issuer: '$got' want '$want'"
+  [[ $spoof == "$want" ]] || die "$h: X-Forwarded-Host spoof changed issuer to '$spoof'"
+  [[ ${tok:-0} -gt 100 ]] || die "$h: no admin token"
+  log "OK smoke $h: issuer $got, X-Forwarded-Host spoof ignored, admin token"
+done

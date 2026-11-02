@@ -30,10 +30,26 @@ kubectl apply --server-side -f "https://github.com/cloudnative-pg/cloudnative-pg
 kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=300s >/dev/null
 log "cnpg ready"
 
-kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-scripts/certs.sh "$NS"
+for ns in "$NS" legacy; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done
+scripts/certs.sh "$NS" legacy
 ensure_secret kc-bootstrap-admin password
 kubectl -n "$NS" get cluster.postgresql.cnpg.io pg-1 >/dev/null 2>&1 || create_db pg-1
+
+# Legacy IdP (outside world). Its broker client secret is copied to Keycloak's namespace for the IdP configs.
+if ! kubectl -n legacy get secret legacy-idp >/dev/null 2>&1; then
+  kubectl -n legacy create secret generic legacy-idp --from-literal=user-password="$(openssl rand -hex 12)" \
+    --from-literal=client-secret="$(openssl rand -hex 24)" >/dev/null
+fi
+kubectl -n "$NS" create secret generic legacy-broker --dry-run=client -o yaml \
+  --from-literal=client-secret="$(kubectl -n legacy get secret legacy-idp -o jsonpath='{.data.client-secret}' | base64 -d)" \
+  | kubectl apply -f - >/dev/null
+legacy_id=$(docker build -q -f images/legacy-idp/Dockerfile legacy-idp) # tests run inside the build
+LEGACY_IMAGE=kc-bluegreen/legacy-idp:${legacy_id:7:12} # content tag: a code change rolls the Deployment
+docker tag "$legacy_id" "$LEGACY_IMAGE"
+kind load docker-image --name "$CLUSTER" "$LEGACY_IMAGE" >/dev/null 2>&1 || die "kind load $LEGACY_IMAGE"
+LEGACY_IMAGE=docker.io/$LEGACY_IMAGE envsubst < k8s/legacy/legacy-idp.yaml.tpl | kubectl apply -f - >/dev/null
+kubectl -n legacy rollout status deploy/legacy-idp --timeout=300s >/dev/null
+log "legacy-idp ready: https://legacy-net1.localtest.me, https://legacy-net2.localtest.me"
 
 build_image "$FROM" 1
 kubectl apply -f k8s/edge/ >/dev/null
@@ -43,4 +59,4 @@ if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then
 else
   set_active "$(state activeColor)" "$(state activeDb)" "$(state version)" # k8s/edge/ hard-codes blue; state wins
 fi
-log "up: https://kc.localtest.me/keycloak/admin (admin: temp-admin, password: kubectl -n $NS get secret kc-bootstrap-admin -o jsonpath='{.data.password}' | base64 -d)"
+log "up: https://kc-net1.localtest.me/keycloak/admin + kc-net2 (admin: temp-admin, password: kubectl -n $NS get secret kc-bootstrap-admin -o jsonpath='{.data.password}' | base64 -d)"

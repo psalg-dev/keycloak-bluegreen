@@ -41,7 +41,7 @@ image_tag() { echo "$1-p${2:-1}"; } # <kc_version> [provider_version]
 build_image() {
   local tag; tag=$(image_tag "$1" "${2:-1}")
   docker build -q --build-arg "KC_VERSION=$1" -t "$KC_IMAGE:$tag" images/keycloak >/dev/null
-  kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null
+  kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag"
   log "image $KC_IMAGE:$tag loaded"
 }
 

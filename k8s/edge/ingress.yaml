@@ -8,10 +8,20 @@ metadata:
 spec:
   ingressClassName: nginx
   tls:
-    - hosts: [kc.localtest.me]
+    - hosts: [kc-net1.localtest.me, kc-net2.localtest.me]
       secretName: localtest-tls
   rules:
-    - host: kc.localtest.me
+    - host: kc-net1.localtest.me
+      http:
+        paths:
+          - path: /keycloak
+            pathType: Prefix
+            backend:
+              service:
+                name: kc-active
+                port:
+                  name: http
+    - host: kc-net2.localtest.me
       http:
         paths:
           - path: /keycloak

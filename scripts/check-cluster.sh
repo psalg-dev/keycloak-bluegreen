@@ -24,5 +24,10 @@ for p in $(jq -r '.items[].metadata.name' <<<"$pods"); do
   if grep -v "kc-$color-" <<<"$members" | grep -q .; then die "$p: foreign member in view: $view"; fi
 done
 
+# Direct access must be refused for unlabelled pods (else they could forge the issuer via X-Forwarded-Host).
+direct=$(kubectl -n "$NS" run "np-$RANDOM" --rm -i --restart=Never --quiet --image=curlimages/curl:8.23.0 --labels=app=np-check \
+  --command -- sh -c "curl -s -m 5 -o /dev/null -w %{http_code} http://kc-$color-keycloak.$NS/keycloak/realms/master || true")
+[[ $direct == 000 ]] || die "kc-$color: unlabelled pod reached Keycloak directly (HTTP $direct); NetworkPolicy not enforced"
+
 [[ $(state activeColor) == "$color" ]] || log "note: kc-state.activeColor=$(state activeColor)"
-log "OK kc-$color: 3/3 Ready, 3 zones, one view of 3"
+log "OK kc-$color: 3/3 Ready, 3 zones, one view of 3, direct access blocked"

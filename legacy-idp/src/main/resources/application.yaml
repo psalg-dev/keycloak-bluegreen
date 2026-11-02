@@ -1,0 +1,32 @@
+server:
+  port: 8080
+  forward-headers-strategy: framework # ingress terminates TLS; issuer/redirects use X-Forwarded-Proto/Host
+  servlet:
+    session:
+      timeout: 8h # the legacy SSO session that makes Keycloak re-logins silent
+
+legacy:
+  users: 5000
+  user-password: ${LEGACY_USER_PASSWORD}
+
+spring:
+  security:
+    oauth2:
+      authorizationserver:
+        client:
+          keycloak-broker:
+            registration:
+              client-id: keycloak-broker
+              client-secret: "{noop}${LEGACY_CLIENT_SECRET}"
+              client-authentication-methods: [client_secret_basic, client_secret_post]
+              authorization-grant-types: [authorization_code, refresh_token]
+              # one Keycloak IdP config per network pair: kc-netN brokers via alias legacy-netN
+              redirect-uris:
+                - https://kc-net1.localtest.me/keycloak/realms/demo/broker/legacy-net1/endpoint
+                - https://kc-net2.localtest.me/keycloak/realms/demo/broker/legacy-net2/endpoint
+              post-logout-redirect-uris:
+                - https://kc-net1.localtest.me/keycloak/realms/demo/broker/legacy-net1/endpoint/logout_response
+                - https://kc-net2.localtest.me/keycloak/realms/demo/broker/legacy-net2/endpoint/logout_response
+              scopes: [openid, profile, email]
+            require-proof-key: true
+            require-authorization-consent: false

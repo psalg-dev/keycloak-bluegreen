@@ -41,8 +41,10 @@ externalDatabase:
   existingSecretPasswordKey: password
 
 extraEnvVars:
-  - name: KC_HOSTNAME
-    value: https://kc.localtest.me/keycloak
+  # Served under several hostnames (kc-net1/kc-net2), like prod: the issuer follows the request host.
+  # Only safe because ingress-nginx routes just the known hosts and overwrites X-Forwarded-Host (smoke.sh proves it).
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
   # Each color is its own Infinispan cluster. Both share a DB and jdbc-ping discovers via the DB,
   # so without distinct names blue and green would merge into one mixed cluster.
   - name: KC_CACHE_EMBEDDED_CLUSTER_NAME # 26.8: required with stateless; the SPI form is ignored
@@ -108,3 +110,16 @@ service:
   type: ClusterIP
 ingress:
   enabled: false # traffic enters via Ingress kc -> Service kc-active (the blue/green switch)
+
+# With hostname-strict=false Keycloak builds its issuer from X-Forwarded-Host. ingress-nginx overwrites that header,
+# but a pod reaching Keycloak directly could forge the issuer. So only these may connect directly:
+# the ingress controller, this release's own pods (JGroups), and pods labelled kc-<color>-keycloak-client=true
+# (config-cli, replay jobs).
+networkPolicy:
+  enabled: true
+  allowExternal: false
+  addExternalClientAccess: true
+  ingressNSMatchLabels:
+    kubernetes.io/metadata.name: ingress-nginx
+  ingressNSPodMatchLabels:
+    app.kubernetes.io/component: controller
