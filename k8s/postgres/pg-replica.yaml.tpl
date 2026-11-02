@@ -4,7 +4,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: ${DB}
-  namespace: keycloak
+  namespace: ${NS}
 spec:
   instances: 3
   postgresql:
@@ -23,7 +23,7 @@ spec:
   externalClusters:
     - name: ${SRC}
       connectionParameters:
-        host: ${SRC}-rw.keycloak.svc
+        host: ${SRC}-rw.${NS}.svc
         user: streaming_replica
         sslmode: verify-full
         dbname: postgres

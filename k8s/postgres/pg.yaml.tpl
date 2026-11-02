@@ -2,7 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: ${DB}
-  namespace: keycloak
+  namespace: ${NS}
 spec:
   instances: 3
   postgresql:

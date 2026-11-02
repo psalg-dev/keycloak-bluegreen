@@ -66,7 +66,7 @@ ensure_secret() {
 
 # create_db <name>: CNPG cluster, waits until Ready
 create_db() {
-  DB=$1 envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
+  DB=$1 NS=$NS envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$1" --for=condition=Ready --timeout=600s >/dev/null
   log "db $1 ready"
 }

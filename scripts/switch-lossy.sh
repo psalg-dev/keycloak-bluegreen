@@ -14,7 +14,7 @@ new=pg-$(( ${src#pg-} + 1 ))
 frozen=(/keycloak/admin /keycloak/realms/demo/account /keycloak/realms/master/account)
 
 # 1. Green's DB: a streaming replica of the active one. 2. Target image ready (keeps the window short).
-DB=$new SRC=$src envsubst < k8s/postgres/pg-replica.yaml.tpl | kubectl apply -f - >/dev/null
+DB=$new SRC=$src NS=$NS envsubst < k8s/postgres/pg-replica.yaml.tpl | kubectl apply -f - >/dev/null
 kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$new" --for=condition=Ready --timeout=900s >/dev/null
 event replica_ready db="$new" source="$src"
 build_image "$target" 1
