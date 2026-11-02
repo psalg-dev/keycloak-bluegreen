@@ -72,12 +72,17 @@ deploy_color() {
   log "kc-$color @ $version on $db ready"
 }
 
-# set_active <color> <db> <kc_version>: flip the switch, record state
+# set_active <color> <db> <kc_version>: flip the switch, record state (the previous one too, for rollback.sh)
 set_active() {
+  local pc pd pv
+  pc=$(state activeColor 2>/dev/null || true) pd=$(state activeDb 2>/dev/null || true) pv=$(state version 2>/dev/null || true)
+  [[ $pc == "$1" && $pd == "$2" ]] && { pc=$(state previousColor 2>/dev/null || true); pd=$(state previousDb 2>/dev/null || true)
+    pv=$(state previousVersion 2>/dev/null || true); } # re-assert (up.sh): keep the real previous state
   kubectl -n "$NS" patch svc kc-active --type merge \
     -p "{\"spec\":{\"selector\":{\"app.kubernetes.io/instance\":\"kc-$1\"}}}" >/dev/null
-  kubectl -n "$NS" create configmap kc-state --from-literal=activeColor="$1" \
-    --from-literal=activeDb="$2" --from-literal=version="$3" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n "$NS" create configmap kc-state --from-literal=activeColor="$1" --from-literal=activeDb="$2" \
+    --from-literal=version="$3" --from-literal=previousColor="$pc" --from-literal=previousDb="$pd" \
+    --from-literal=previousVersion="$pv" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   log "active -> $1 ($3 on $2)"
 }
 

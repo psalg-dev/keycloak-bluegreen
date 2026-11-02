@@ -44,6 +44,10 @@ kubectl -n "$NS" wait "pod/kc-$idle-keycloak-1" --for=condition=Ready --timeout=
 event recovered color="$idle" pod="kc-$idle-keycloak-1"
 
 # 7. Drain the old color, then scale it to 0 (helm upgrade would restore it; the next switch redeploys it anyway).
+#    KEEP_OLD=true keeps it running for the rollback hold (scripts/rollback.sh flips back and scales the new one down).
+if [[ ${KEEP_OLD:-false} == true ]]; then
+  log "switched $active -> $idle; kc-$active kept running for rollback"; exit 0
+fi
 sleep "${DRAIN_SECONDS:-60}"
 kubectl -n "$NS" scale sts "kc-$active-keycloak" --replicas=0 >/dev/null
 event drained color="$active"

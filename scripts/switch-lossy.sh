@@ -59,10 +59,13 @@ sleep "${DRAIN_SECONDS:-15}"
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event replay_done
 
-# 11. Unfreeze. 12. Old color + old DB stay for rollback (set_active back loses green's writes since the copy point).
+# 11. Unfreeze. 12. KEEP_OLD=true: old color + old DB stay up for scripts/rollback.sh (it reverse-replays green's
+#     logouts/creations and flips back). Otherwise the old color is scaled down; its DB stays as a last-resort copy.
 unfreeze
 event window_end
-sleep "${ROLLBACK_HOLD:-0}"
+if [[ ${KEEP_OLD:-false} == true ]]; then
+  log "switched $active -> $idle ($src -> $new); kc-$active on $src kept running for rollback"; exit 0
+fi
 kubectl -n "$NS" scale sts "kc-$active-keycloak" --replicas=0 >/dev/null
 event drained color="$active"
 log "switched $active -> $idle ($from -> $target, $src -> $new), changesets $before -> $after"
