@@ -13,6 +13,7 @@ resolve=(); for h in kc-net1 kc-net2 legacy-net1 legacy-net2; do resolve+=(--res
 app_secret=$(kubectl -n "$NS" get secret k6-app -o jsonpath='{.data.secret}' | base64 -d)
 user_pw=$(kubectl -n legacy get secret legacy-idp -o jsonpath='{.data.user-password}' | base64 -d)
 body=$(mktemp)
+ca_file >/dev/null # sets CA_FILE
 
 jwt() { local p; p=$(cut -d. -f2 <<<"$1" | tr '_-' '/+'); while ((${#p} % 4)); do p+="="; done; base64 -d <<<"$p"; }
 
@@ -20,7 +21,7 @@ jwt() { local p; p=$(cut -d. -f2 <<<"$1" | tr '_-' '/+'); while ((${#p} % 4)); d
 login() {
   local net=$1 user=$2 jar code loc url csrf
   jar=$(mktemp)
-  local c=(curl -s --cacert out/certs/ca.crt "${resolve[@]}" -b "$jar" -c "$jar" -H 'Accept: text/html' -o "$body" -w '%{http_code} %{redirect_url}')
+  local c=(curl -s --cacert "$CA_FILE" "${resolve[@]}" -b "$jar" -c "$jar" -H 'Accept: text/html' -o "$body" -w '%{http_code} %{redirect_url}')
   local kc=https://kc-$net.localtest.me/keycloak/realms/demo cb=https://app.localtest.me/cb
   url="$kc/protocol/openid-connect/auth?client_id=k6-app&response_type=code&scope=openid%20tenant&state=s1&kc_idp_hint=legacy-$net&redirect_uri=$cb"
   # follow [curl args for the first request]: follow redirects until the app callback or a page (left in $body)
@@ -34,7 +35,7 @@ login() {
   follow --data-urlencode "username=$user" --data-urlencode "password=$user_pw" --data-urlencode "_csrf=$csrf"
   [[ $url == "$cb"* ]] || die "$net/$user: stopped at $url: $(grep -o '<title>[^<]*' "$body" | head -1)"
   code=${url#*code=}; code=${code%%&*}
-  local tok; tok=$(curl -sf --cacert out/certs/ca.crt "${resolve[@]}" -u "k6-app:$app_secret" -d grant_type=authorization_code \
+  local tok; tok=$(curl -sf --cacert "$CA_FILE" "${resolve[@]}" -u "k6-app:$app_secret" -d grant_type=authorization_code \
     -d "code=$code" -d "redirect_uri=$cb" "$kc/protocol/openid-connect/token") || die "$net/$user: code exchange failed"
   jwt "$(jq -r .id_token <<<"$tok")"
   rm -f "$jar"

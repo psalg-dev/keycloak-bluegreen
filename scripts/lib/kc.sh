@@ -88,12 +88,23 @@ cli_tag() { case $1 in 25.*) echo 6.5.1-25 ;; 26.*) echo 6.5.1-26.5.5 ;; *) die 
 # control-plane node, TLS verified against the demo CA), authenticated as the config-cli service account.
 admin_api() {
   local method=$1 path=$2; shift 2
+  [[ -n ${CA_FILE:-} ]] || ca_file >/dev/null
   local ip; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
-  local base=https://kc-net1.localtest.me/keycloak c=(curl -sf --cacert out/certs/ca.crt --resolve "kc-net1.localtest.me:443:$ip")
+  local base=https://kc-net1.localtest.me/keycloak c=(curl -sf --cacert "$CA_FILE" --resolve "kc-net1.localtest.me:443:$ip")
   if [[ -z ${ADMIN_TOKEN:-} ]]; then
     ADMIN_TOKEN=$("${c[@]}" -d grant_type=client_credentials -d client_id=config-cli \
       --data-urlencode "client_secret=$(kubectl -n "$NS" get secret kc-config-cli -o jsonpath='{.data.secret}' | base64 -d)" \
       "$base/realms/master/protocol/openid-connect/token" | jq -r .access_token) || die "admin token"
   fi
   "${c[@]}" -X "$method" -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' "$@" "$base/admin$path"
+}
+
+# ca_file: path to the demo CA, read from the cluster (Secret demo-ca), so scripts also work in a fresh checkout such
+# as a Jenkins workspace, where out/certs does not exist.
+ca_file() {
+  if [[ -z ${CA_FILE:-} ]]; then
+    CA_FILE=$(mktemp)
+    kubectl -n "$NS" get secret demo-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > "$CA_FILE" || die "no Secret demo-ca"
+  fi
+  echo "$CA_FILE"
 }
