@@ -66,8 +66,14 @@ public class ReplayEventListener implements EventListenerProvider {
         line.put("email", user.getEmail());
         line.put("attributes", attributes);
         line.put("federatedIdentities", session.users().getFederatedIdentitiesStream(realm, user)
-                .map(f -> Map.of("identityProvider", f.getIdentityProvider(), "userId", f.getUserId(),
-                        "userName", f.getUserName()))
+                .map(f -> {
+                    // not Map.of: a null userName would throw and EventBuilder would swallow the whole line
+                    Map<String, String> m = new LinkedHashMap<>();
+                    m.put("identityProvider", f.getIdentityProvider());
+                    m.put("userId", f.getUserId());
+                    m.put("userName", f.getUserName());
+                    return m;
+                })
                 .toList());
     }
 
