@@ -15,10 +15,13 @@ zones=$(jq -r '.items[].spec.nodeName' <<<"$pods" | while read -r n; do
 [[ $zones == 3 ]] || die "kc-$color: pods span $zones zones, want 3"
 
 # ISPN000094: "Received new cluster view for channel <name>: [<coord>|<n>] (<size>) [<members>]"
+# 25 has no cluster-name option (channel stays ISPN); its colors are kept apart by DNS_PING on the release's headless
+# Service, which the member check below proves.
+chan=kc-$color; [[ $(jq -r '.items[0].spec.containers[0].image' <<<"$pods") == *:25.* ]] && chan=ISPN
 for p in $(jq -r '.items[].metadata.name' <<<"$pods"); do
   view=$(kubectl -n "$NS" logs "$p" | grep -o 'ISPN000094[^"]*' | tail -1)
   [[ -n $view ]] || die "$p: no cluster view logged"
-  grep -q "channel kc-$color:" <<<"$view" || die "$p: wrong channel: $view"
+  grep -q "channel $chan:" <<<"$view" || die "$p: wrong channel: $view"
   grep -q ') (3) \[\|] (3) \[' <<<"$view" || die "$p: view size != 3: $view"
   members=${view##*(3) [}; members=${members%%]*}; members=$(tr ',' '\n' <<<"$members")
   if grep -v "kc-$color-" <<<"$members" | grep -q .; then die "$p: foreign member in view: $view"; fi
