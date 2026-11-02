@@ -43,7 +43,10 @@ KinD "kc": 1 control-plane + 3 workers (labels topology.kubernetes.io/zone=a|b|c
 ```
 Jenkins UI: http://localhost:8081 (8080 taken on dev box). Jenkins reaches the API server over the
 docker network `kind` (compose declares it with `name: kind`; kind reuses an existing network of that
-name). Kubeconfig via `kind get kubeconfig --internal`.
+name. If it refuses, the fallback is `KIND_EXPERIMENTAL_DOCKER_NETWORK=<compose network>`; Slice 1 checks this).
+Kubeconfig via `kind get kubeconfig --internal`.
+`scripts/demo.sh` sets `ROLLBACK_HOLD=0` between narrative steps 2 and 3: step 3 redeploys the blue slot,
+which step 2 would otherwise still be holding for rollback.
 
 ### Fixed facts (verified 2026-11-02)
 - Keycloak 26.8.1 latest; 26.8.0 and 26.7.5 exist. `stateless` feature = preview since 26.7: auth
@@ -60,7 +63,14 @@ name). Kubeconfig via `kind get kubeconfig --internal`.
   `KC_DB_PASSWORD_FILE`, which only Bitnami's scripts understand.
   => our image re-lays the official image into `/opt/bitnami/keycloak` and adds a `liblog.sh` stub
      (`info(){ echo "$@"; }`). Values set `usePasswordFiles: false`,
-     `command: [/opt/bitnami/keycloak/bin/kc.sh]`, `args: [start, --optimized]`, and custom probes.
+     `command: [/opt/bitnami/keycloak/bin/kc.sh]`, `args: [start, --optimized]`, custom probes, and
+     `global.security.allowInsecureImages: true` (in values-common).
+- Build-time options are baked by `kc.sh build`. Under `start --optimized`, a different runtime value is
+  ignored with a warning. Exact Dockerfile line:
+  `kc.sh build --db=postgres --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --features=stateless`.
+  The chart env (`KC_CACHE`, `KC_CACHE_STACK`, `KC_METRICS_ENABLED`) must match it. Without
+  `--health-enabled=true`, `/health/ready` returns 404 and no pod ever goes Ready. `stateless` is
+  build-time, so the Slice 5 negative control needs a second image tag (`-nostateless`).
 - keycloak-config-cli: image `adorsys/keycloak-config-cli:6.5.0-26`, built against KC 26.5.4.
   A version mismatch silently drops fields it does not know -> the dropped-field check in Slice 2 is mandatory.
 - ingress-nginx has been EOL since March 2026. It is used because it is the user's production edge. The
@@ -81,7 +91,10 @@ name). Kubeconfig via `kind get kubeconfig --internal`.
   (client secrets from env), `import.validate=true`. Keep `import.managed.*` at the defaults except
   `no-delete` in online (online must never delete).
 - Users are test data, not config: 5k users are seeded by `scripts/seed-users.sh` via admin
-  `partialImport`, not by config-cli.
+  `partialImport`, not by config-cli. Hash the password ONCE and pass the same
+  `credentialData`/`secretData` for every user (5k plaintext passwords = 5k argon2 hashes = minutes of CPU).
+- The bootstrap realm sets `ssoSessionIdleTimeout`/`ssoSessionMaxLifespan` long enough (2h/10h) for the
+  first-login refresh token to survive the whole demo.
 
 ### Custom code (realism, baked into the image)
 `providers/` Maven module `kc-demo-ext`, built against `keycloak-services` ${kc.version}, the lowest version deployed (26.7.5):
@@ -180,12 +193,16 @@ name). Kubeconfig via `kind get kubeconfig --internal`.
 - **Tests**: `scripts/test-gate.sh` feeds 4 synthetic fixtures (`load/fixtures/*.jsonl`): pass, 5xx, broken in-flight login, 503 outside the freeze -> expected exits 0,1,1,1.
 - **Regression scope**: none
 - **Done**: fixtures green. A 5-minute run against blue with no switch -> `gate.sh same-minor` reports 0 errors (the switch-crossing rule is skipped when there is no `switch` event).
+  The load rate is set from this baseline: Keycloak CPU must stay below ~60% of its limit (record rate + CPU in `load/RATE.md`),
+  so an overload 5xx cannot pose as a switch failure.
 - **Don't touch**: providers/, config/
 - **Depends on**: 2, 3
 
 ## Slice 5: same-minor switch (shared DB)
 - **Files**: create `scripts/switch-same-minor.sh`; edit `scripts/lib/kc.sh` (add `drain_color`, `kill_one`)
 - **Contract**: `switch-same-minor.sh <target_version> <provider_version>`
+  0. Pre-flight: `kc.sh update-compatibility metadata` on the active color, then `check` with the target
+     image (`--features=rolling-updates:v2`). A non-zero exit aborts: the change is not same-minor-safe and must use the minor path.
   1. Deploy the idle color with the target image on `activeDb`, own cluster-name, `--wait`.
   2. `check-cluster.sh <idle>`: two separate JGroups views exist, each of size 3.
   3. Smoke on the idle color via its internal Service: login and claims show the new `login_ctx`.
@@ -204,15 +221,26 @@ name). Kubeconfig via `kind get kubeconfig --internal`.
 - **Files**: create `scripts/switch-minor.sh`, `k8s/postgres/pg-replica.yaml.tpl`, `k8s/edge/{kc-maint.yaml,kc-freeze-ingress.yaml}`; edit `scripts/lib/kc.sh` (`freeze`, `unfreeze`, `wait_replica_caught_up`, `promote_db`)
 - **Contract**: `switch-minor.sh <target_version>`
   1. Create `pg-<n+1>` as a CNPG replica cluster of `activeDb` (streaming) and wait for it to be streaming.
+     `externalClusters` must reference the source's `<db>-replication` (client cert) and `<db>-ca`
+     secrets. That's the usual first failure; verify it against the CNPG replica-cluster docs.
   2. Pre-pull and `kind load` the target image (keeps the freeze short).
-  3. `event freeze_start`, then apply `kc-freeze`. Prefix paths under `/realms/` for `protocol/openid-connect/{auth,token,logout}`, `login-actions`, `broker`, plus `/admin` -> kc-maint 503.
-  4. `wait_replica_caught_up`: replay LSN = primary current LSN.
+  3. `event freeze_start`, then apply `kc-freeze`. Prefix paths for BOTH realms `demo` and `master`:
+     `/realms/<r>/protocol/openid-connect/{auth,token,logout}`, `/realms/<r>/login-actions`,
+     `/realms/<r>/broker`, plus `/admin` -> kc-maint 503.
+  4. `wait_replica_caught_up`: NOT strict LSN equality. Blue keeps writing a little (jdbc-ping
+     heartbeats, background cleanup), so equality is never stable. Sample `pg_current_wal_lsn()` on the
+     primary AFTER the freeze ingress is live, wait until the replica's `pg_last_wal_replay_lsn() >=`
+     that sample, and repeat once more. Writes after the sample are heartbeats/cleanup only (no user writes,
+     the paths are frozen); losing them is fine.
   5. Promote (`spec.replica.enabled=false`) and wait until the primary is writable.
   6. Deploy the idle color on the target version against `pg-<n+1>`: 1 replica first, so the migration runs once; then scale to 3.
   7. `config.sh maintenance <idle>` (if any), then smoke internally.
   8. `set_active <idle>`, then `event switch`, `unfreeze`, `event freeze_end`.
   9. Keep the old color + old DB for `ROLLBACK_HOLD=10m`. Rollback = `set_active` back, which loses writes made after the freeze (documented).
 - **Tests**: a full 26.7.5 -> 26.8.0 run under load -> `gate.sh minor` exit 0, with `freeze_seconds` printed.
+  Evidence that the migration ran: record the `DATABASECHANGELOG` row count on `pg-<n+1>` before and after
+  green's first pod (event `migration`). If the count does not change, the README must say the mechanism ran
+  with a no-op migration.
   The image and replica are prepared before the freeze, so the expected freeze is roughly the migration time plus 1-2 pod starts.
 - **Regression scope**: Slices 1-5
 - **Done**: gate green; sessions created on blue are still valid on green (refresh rule); `kc-state.activeDb=pg-2`.
