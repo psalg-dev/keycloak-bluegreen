@@ -1,0 +1,5 @@
+# Build context is the repo root (images/keycloak/Dockerfile builds providers/ + themes/).
+.git
+out/
+legacy-idp/target/
+providers/target/
