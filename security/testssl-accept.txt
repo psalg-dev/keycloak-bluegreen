@@ -1,0 +1,2 @@
+# testssl.sh finding ids accepted by probe tls. One id per line, each with a one-line justification.
+cert_revocation # demo CA (scripts/certs.sh) is an offline throwaway CA without CRL/OCSP; prod certs come from a real PKI

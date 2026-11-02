@@ -1,0 +1,8 @@
+# Accepted kcwarden findings (kcwarden `audit -c`, format of `kcwarden generate-config-template`).
+# One entry per auditor, `allowed` = entity names or regexes. EVERY allowed entity gets a one-line justification comment.
+# Only deliberate properties of this demo belong here; anything else is a finding to fix.
+auditors:
+  - auditor: PasswordPolicyMissing
+    allowed:
+      - demo # by design Keycloak holds no passwords in realm demo: every user is brokered from the legacy IdP
+monitors: []

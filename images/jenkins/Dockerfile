@@ -22,6 +22,15 @@ RUN apt-get update \
  && chmod +x /usr/local/bin/kind /usr/local/bin/kubectl /usr/local/bin/helm \
  && git config --system --add safe.directory '*'
 
-RUN jenkins-plugin-cli --plugins configuration-as-code job-dsl workflow-aggregator git timestamper
+# kcwarden (realm config audit, job kc-kcwarden) in its own venv: Debian's python3 refuses system-wide pip installs.
+ARG KCWARDEN_VERSION=0.19.0
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-venv \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 -m venv /opt/kcwarden \
+ && /opt/kcwarden/bin/pip install --no-cache-dir "kcwarden==${KCWARDEN_VERSION}" \
+ && ln -s /opt/kcwarden/bin/kcwarden /usr/local/bin/kcwarden
+
+RUN jenkins-plugin-cli --plugins configuration-as-code job-dsl workflow-aggregator git timestamper junit
 
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
