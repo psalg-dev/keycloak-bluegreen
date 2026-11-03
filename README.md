@@ -107,9 +107,10 @@ the production PDB of 2 out of 3. Latency numbers are comparable within a run, n
   logged-out sessions never come back after the replay; the app rules (introspection, JWT, refresh, back-/front-channel
   logout delivered, logout effective); and that load really ran through the cutover (`load_through_cutover`) and the
   lossy window really was exercised (`window_exercised`), so no rule can pass on silence.
-- **Report** (`out/report.html`, one tab per case): error rates over time with the switch events marked, latency
-  distributions before/during/after the cutover, and the failure-mode table with counts, rates and expected bounds.
-  Definitions: [docs/failure-modes.md](docs/failure-modes.md).
+- **Report** (`out/report.html`, one tab per case): the data baseline (requests, users), error rates over time with
+  the switch events marked, latency distributions before/during/after the cutover, and the failure-mode table with
+  counts, rates and expected bounds. Every failure mode carries a one-line explainer of what it means to a user
+  (`report/modes.tsv`). Definitions: [docs/failure-modes.md](docs/failure-modes.md).
 
 ## Results
 
