@@ -12,7 +12,14 @@
 //   user, net       userNNNN (null on reads), net1|net2
 //   sub, iss        from the access token on token lines (iss also = discovery `issuer`), else null
 //   claims          {login_ctx, tenant} from the access token, else nulls
-// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), DURATION (60m, a cap: load.sh stop ends the run).
+// Scenario `app` (browser through the test client app, docs/test-apps-contract.md) uses the same fields; its steps:
+//   app_login_start|_authorization|_callback|_other (app hops), app_login_<hop above without login_> (KC/IdP hops),
+//   app_me, app_call_jwt, app_call_introspect, app_logout_start|_kc|_legacy|_done, app_frontchannel, app_me_after_logout
+//   and adds (app lines only): registration (bc-net1 ...), sid (from /me, null before it),
+//   upstream_status (calls: the resource server's status from the app's JSON); `error` on calls = the app's JSON error.
+//   sub, iss, claims on app_me lines come from the /me response.
+// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), APP_VUS (6,
+// 0 = no app scenario), DURATION (60m, a cap: load.sh stop ends the run).
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
@@ -30,6 +37,8 @@ const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU ever
 // sessions); even ones start a fresh session every ROTATE_SECONDS, so sessions are also born on the new color (the
 // rollback rules judge those). With all-long-lived sessions a rollback gate had 0 green-born sessions to look at.
 const ROTATE_SECONDS = Number(__ENV.ROTATE_SECONDS || 60);
+const APP = 'https://app.localtest.me';
+const APP_VUS = Number(__ENV.APP_VUS || 6);
 
 export const options = {
   scenarios: {
@@ -42,6 +51,7 @@ export const options = {
       preAllocatedVUs: 2, maxVUs: 5 },
   },
 };
+if (APP_VUS > 0) options.scenarios.app = { executor: 'constant-vus', exec: 'app', vus: APP_VUS, duration: DURATION };
 
 export function setup() {
   if (!SECRET || !PASSWORD) exec.test.abort('K6_APP_SECRET and LEGACY_USER_PASSWORD must be set');
@@ -65,10 +75,12 @@ function newSession() {
     jar: new http.CookieJar(), login_id: null, rt: null, idt: null, lost: false };
 }
 
-function log(s, scenario, step, t0, res, c) {
-  console.log(JSON.stringify({ t_start: t0, t_end: now(), scenario, step, status: res.status, error: oauthError(res),
+// x: extra fields (override); app sessions (s.reg set) always add registration + sid
+function log(s, scenario, step, t0, res, c, x) {
+  console.log(JSON.stringify(Object.assign({ t_start: t0, t_end: now(), scenario, step, status: res.status, error: oauthError(res),
     login_id: s.login_id || null, user: s.user || null, net: s.net, sub: c.sub || null, iss: c.iss || null,
-    claims: { login_ctx: c.login_ctx || null, tenant: c.tenant || null } }));
+    claims: { login_ctx: c.login_ctx || null, tenant: c.tenant || null } },
+  s.reg ? { registration: s.reg, sid: s.sid || null } : {}, x)));
 }
 
 export function oauthError(res) {
@@ -128,42 +140,48 @@ function token(s, scenario, step, form) {
   return { status: res.status, error: oauthError(res), body };
 }
 
-// Brokered auth-code flow, one logged line per hop, manual redirects. Returns true when s holds fresh tokens.
-function doLogin(s, scenario) {
-  s.login_id = `${exec.vu.idInTest}-${++seq}`;
-  s.rt = null;
-  const q = { client_id: 'k6-app', response_type: 'code', scope: 'openid tenant', redirect_uri: REDIRECT,
-    state: `${s.login_id}-${rand(1e9)}`, nonce: String(rand(1e9)), kc_idp_hint: `legacy-${s.net}` };
-  let method = 'GET', url = `${kc(s.net)}/protocol/openid-connect/auth?${qs(q)}`, body = null;
-  for (let hop = 0; hop < 12; hop++) {
-    const step = stepOf(method, url), t0 = now();
+// Walk a browser login from url: manual redirects, forms submitted as-is, the legacy password form filled after think
+// time. One logged line per hop, named stepFn(method, url). Returns the redirect Location for which done(loc, url) holds
+// (url = the request that answered it), or null on an error status / dead end.
+function hops(s, scenario, url, stepFn, done) {
+  let method = 'GET', body = null;
+  for (let hop = 0; hop < 14; hop++) {
+    const step = stepFn(method, url), t0 = now();
     // Accept: text/html, or Spring answers 401 instead of redirecting to /login
     const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: step } });
     log(s, scenario, step, t0, res, {});
-    if (res.status === 0 || res.status >= 400) return false;
+    if (res.status === 0 || res.status >= 400) return null;
     if (res.status >= 300) {
-      const loc = res.headers.Location || '';
-      if (loc.startsWith(REDIRECT)) {
-        const code = param(loc, 'code');
-        const t = code ? token(s, scenario, 'login_token', { grant_type: 'authorization_code', code, redirect_uri: REDIRECT }) : null;
-        if (!t || t.status !== 200) return false;
-        s.rt = t.body.refresh_token; s.idt = t.body.id_token;
-        return true;
-      }
-      method = 'GET'; url = abs(loc, url); body = null;
+      const loc = abs(res.headers.Location || '', url);
+      if (done(loc, url)) return loc;
+      method = 'GET'; url = loc; body = null;
       continue;
     }
     // 200: Spring's login form, or a first-broker-login / review-profile form -> submit it as-is
     const f = formOf(res.body, url);
-    if (!f) return false; // dead end (error page)
+    if (!f) return null; // dead end (error page)
     if ('password' in f.fields) {
-      if (step !== 'login_legacy_form' || url.includes('error')) return false; // KC's own login form, or wrong password
+      if (!step.endsWith('login_legacy_form') || url.includes('error')) return null; // KC's own login form, or wrong password
       sleep(Math.random() * 20); // think time 0-20 s
       f.fields.username = s.user; f.fields.password = PASSWORD;
     }
     method = f.method; url = f.action; body = f.fields;
   }
-  return false;
+  return null;
+}
+
+// Brokered auth-code flow for k6-app, then the code exchange. Returns true when s holds fresh tokens.
+function doLogin(s, scenario) {
+  s.login_id = `${exec.vu.idInTest}-${++seq}`;
+  s.rt = null;
+  const q = { client_id: 'k6-app', response_type: 'code', scope: 'openid tenant', redirect_uri: REDIRECT,
+    state: `${s.login_id}-${rand(1e9)}`, nonce: String(rand(1e9)), kc_idp_hint: `legacy-${s.net}` };
+  const loc = hops(s, scenario, `${kc(s.net)}/protocol/openid-connect/auth?${qs(q)}`, stepOf, (l) => l.startsWith(REDIRECT));
+  const code = loc && param(loc, 'code');
+  const t = code ? token(s, scenario, 'login_token', { grant_type: 'authorization_code', code, redirect_uri: REDIRECT }) : null;
+  if (!t || t.status !== 200) return false;
+  s.rt = t.body.refresh_token; s.idt = t.body.id_token;
+  return true;
 }
 
 export function login() {
@@ -222,4 +240,89 @@ export function reads() {
     res = http.get(`${kc(net)}/protocol/openid-connect/certs`, { tags: { name: 'jwks' } });
     log({ net }, 'reads', 'jwks', t0, res, {});
   });
+}
+
+// ---- scenario `app`: a browser using the test client app (docs/test-apps-contract.md)
+
+// which registration: (VU id + iteration) % 4 -> net1/net2 x bc/fc, so the split stays even whatever VU ids k6 assigns
+export function appPick(i) {
+  const net = i % 2 ? 'net2' : 'net1';
+  return { net, reg: `${Math.floor(i / 2) % 2 ? 'fc' : 'bc'}-${net}` };
+}
+
+export function appStepOf(method, url) {
+  if (!url.startsWith(`${APP}/`)) return `app_${stepOf(method, url)}`;
+  const path = url.slice(APP.length).replace(/[?#].*$/, '');
+  if (path.startsWith('/login/oauth2/code/')) return 'app_login_callback';
+  if (path.startsWith('/oauth2/authorization/')) return 'app_login_authorization';
+  if (path.startsWith('/login/')) return 'app_login_start';
+  return 'app_login_other';
+}
+
+export function logoutStepOf(url) {
+  if (url.startsWith(`${APP}/`)) return /^[^?#]*\/logout([?#]|$)/.test(url.slice(APP.length)) ? 'app_logout_start' : 'app_logout_done';
+  return /^https?:\/\/legacy-/.test(url) ? 'app_logout_legacy' : 'app_logout_kc';
+}
+
+export function iframesOf(html, url) {
+  return parseHTML(html).find('iframe').toArray().map((el) => el.attr('src')).filter((x) => x).map((x) => abs(x, url));
+}
+
+export function hdr(res, name) { // k6 canonicalizes header names (X-Csrf-Token); match case-insensitively
+  const k = Object.keys(res.headers || {}).find((h) => h.toLowerCase() === name.toLowerCase());
+  return k ? res.headers[k] : null;
+}
+
+// GET an app JSON endpoint. Accept: application/json, so an anonymous request gets the contract's 401, not a login redirect.
+function appGet(s, step, path) {
+  const t0 = now();
+  const res = http.get(APP + path, { redirects: 0, jar: s.jar, headers: { Accept: 'application/json' }, tags: { name: step } });
+  return { t0, res, b: safe(() => res.json()) || {} };
+}
+
+export function app() {
+  const s = Object.assign(newSession(), appPick(exec.vu.idInTest + exec.vu.iterationInScenario));
+  s.login_id = `${exec.vu.idInTest}-${++seq}`;
+  // login: app -> Spring /oauth2/authorization -> Keycloak -> legacy IdP form -> Keycloak -> app callback (code
+  // exchange happens in the app); stop after the callback's redirect
+  hops(s, 'app', `${APP}/login/${s.reg}`, appStepOf, (loc, url) => appStepOf('GET', url) === 'app_login_callback');
+  let r = appGet(s, 'app_me', '/me');
+  if (r.res.status === 200) { s.sid = r.b.sid; s.csrf = hdr(r.res, 'X-CSRF-TOKEN'); }
+  log(s, 'app', 'app_me', r.t0, r.res, r.b);
+  if (r.res.status !== 200) { sleep(PROBE_EVERY); return; } // login failed (gate: app_login_ok)
+
+  const end = Date.now() + (30 + Math.random() * 90) * 1000;
+  for (let n = 0; Date.now() < end; n++) {
+    sleep(PROBE_EVERY);
+    const target = n % 2 ? 'introspect' : 'jwt';
+    r = appGet(s, `app_call_${target}`, `/call/${target}`);
+    log(s, 'app', `app_call_${target}`, r.t0, r.res, {}, { upstream_status: r.b.upstream_status ?? null, error: r.b.error || null });
+  }
+
+  // RP-initiated logout like a browser: POST /logout (CSRF header) -> Keycloak end_session -> legacy IdP logout ->
+  // Keycloak -> post_logout_redirect_uri on the app. On a page: load every <iframe> (front-channel logout URLs), submit
+  // a form (logout confirm) or follow #continue (what the front-channel page's script does).
+  let method = 'POST', url = `${APP}/logout`, headers = { Accept: 'text/html', 'X-CSRF-TOKEN': s.csrf || '' }, body = null;
+  for (let i = 0; i < 10; i++) {
+    const step = logoutStepOf(url), t0 = now();
+    const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers, tags: { name: step } });
+    log(s, 'app', step, t0, res, {});
+    headers = { Accept: 'text/html' };
+    if (step === 'app_logout_done') break; // back on the app: logout chain complete
+    if (res.status >= 300 && res.status < 400 && res.headers.Location) {
+      method = 'GET'; url = abs(res.headers.Location, url); body = null;
+      continue;
+    }
+    if (res.status !== 200) break;
+    iframesOf(res.body, url).forEach((src) => {
+      const f0 = now();
+      log(s, 'app', 'app_frontchannel', f0, http.get(src, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: 'app_frontchannel' } }), {});
+    });
+    const f = formOf(res.body, url);
+    const next = f ? null : parseHTML(res.body).find('#continue').attr('href');
+    if (f) { method = f.method; url = f.action; body = f.fields; } else if (next) { method = 'GET'; url = abs(next, url); body = null; } else break;
+  }
+  r = appGet(s, 'app_me_after_logout', '/me');
+  log(s, 'app', 'app_me_after_logout', r.t0, r.res, {});
+  sleep(1);
 }

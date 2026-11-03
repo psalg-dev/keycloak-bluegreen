@@ -1,0 +1,1 @@
+{"app":"testresource","t":"2026-11-02T22:10:24.000Z","event":"introspection","issuer":"https://kc-net1.localtest.me/keycloak/realms/demo","http_status":0,"active":null,"latency_ms":2000,"error":"timeout"}

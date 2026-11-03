@@ -1,0 +1,1 @@
+{"app":"testclient","t":"2026-11-02T22:10:35.150Z","event":"backchannel_logout","registration":"bc-net1","sid":"sid-a1","sub":"5f0c2a7e-91d3-4b6a-8e2f-000000000601","iss":"https://kc-net1.localtest.me/keycloak/realms/demo","ok":false,"error":"invalid logout token"}

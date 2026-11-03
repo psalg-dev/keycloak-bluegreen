@@ -1,0 +1,1 @@
+{"t_start":"2026-11-02T22:10:30.000Z","t_end":"2026-11-02T22:10:30.030Z","scenario":"app","step":"app_call_jwt","status":200,"error":null,"login_id":"20-1","user":"user0601","net":"net1","sub":null,"iss":null,"claims":{"login_ctx":null,"tenant":null},"registration":"bc-net1","sid":"sid-a1","upstream_status":401}
