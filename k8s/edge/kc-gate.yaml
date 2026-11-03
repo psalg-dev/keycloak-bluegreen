@@ -1,0 +1,42 @@
+# The freeze without an nginx reload. Ingress kc-gate is permanent: its longer Prefix paths win over Ingress kc's
+# /keycloak and go to Service kc-gate, whose selector scripts/lib/kc.sh sets: the active color normally, kc-maint (503)
+# during a freeze. A selector change only moves endpoints, which ingress-nginx swaps without a reload. Creating and
+# deleting a freeze Ingress reloaded nginx, which dropped Keycloak's pooled connections to the legacy IdP: broker
+# callbacks failed with NoHttpResponseException -> HTTP 500 (build #12, 02:06:53).
+# No selector here on purpose: `kubectl apply` would merge it with the live one; set_active/freeze own it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kc-gate
+  namespace: keycloak
+spec:
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kc-gate
+  namespace: keycloak
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k" # as Ingress kc: Keycloak's cookies/headers exceed 4k
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [kc-net1.localtest.me, kc-net2.localtest.me]
+      secretName: localtest-tls
+  rules:
+    - host: kc-net1.localtest.me
+      http:
+        paths:
+          - { path: /keycloak/admin, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }
+          - { path: /keycloak/realms/demo/account, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }
+          - { path: /keycloak/realms/master/account, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }
+    - host: kc-net2.localtest.me
+      http:
+        paths:
+          - { path: /keycloak/admin, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }
+          - { path: /keycloak/realms/demo/account, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }
+          - { path: /keycloak/realms/master/account, pathType: Prefix, backend: { service: { name: kc-gate, port: { name: http } } } }

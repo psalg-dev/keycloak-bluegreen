@@ -114,6 +114,7 @@ set_active() {
     pv=$(state previousVersion 2>/dev/null || true); } # re-assert (up.sh): keep the real previous state
   kubectl -n "$NS" patch svc kc-active --type merge \
     -p "{\"spec\":{\"selector\":{\"app.kubernetes.io/instance\":\"kc-$1\"}}}" >/dev/null
+  frozen || gate_select "$(kc_selector "$1")" # a freeze keeps admin/account on kc-maint until unfreeze
   kubectl -n "$NS" create configmap kc-state --from-literal=activeColor="$1" --from-literal=activeDb="$2" \
     --from-literal=version="$3" --from-literal=previousColor="$pc" --from-literal=previousDb="$pd" \
     --from-literal=previousVersion="$pv" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -175,29 +176,45 @@ first_install() {
   scripts/seed-users.sh 4000
 }
 
-# freeze <path...>: send these Prefix paths (both hosts) to kc-maint (503 + Retry-After). unfreeze: remove.
-freeze() {
-  local paths; paths=$(printf '%s\n' "$@" | jq -R '{path: ., pathType: "Prefix",
-    backend: {service: {name: "kc-maint", port: {name: "http"}}}}' | jq -sc .)
-  kubectl apply -f k8s/edge/kc-maint.yaml >/dev/null
-  kubectl -n "$NS" rollout status deploy/kc-maint --timeout=120s >/dev/null
-  # shellcheck disable=SC2016 # envsubst's variable list, not an expansion
-  PATHS=$paths envsubst '$PATHS' < k8s/edge/kc-freeze.yaml.tpl | kubectl apply -f - >/dev/null
-  # Applied is not routed: wait until the ingress answers 503 on both hosts, then let requests blue already admitted
-  # finish, so no admin/account write commits after the copy point that follows.
+# kc_selector <color>: the selector of that color's Keycloak pods (JSON). gate_select <json>: Service kc-gate's
+# selector (k8s/edge/kc-gate.yaml): the admin/account paths follow it. frozen: they go to kc-maint right now.
+kc_selector() { printf '{"app.kubernetes.io/name":"keycloak","app.kubernetes.io/instance":"kc-%s"}' "$1"; }
+gate_select() {
+  kubectl -n "$NS" patch svc kc-gate --type json -p "[{\"op\":\"add\",\"path\":\"/spec/selector\",\"value\":$1}]" >/dev/null
+}
+frozen() { [[ $(kubectl -n "$NS" get svc kc-gate -o jsonpath='{.spec.selector.app}' 2>/dev/null) == kc-maint ]]; }
+
+# gate_wait <503|open>: patched is not routed (endpoints propagate in seconds): wait until /keycloak/admin answers 503,
+# or anything else, on both hosts.
+gate_wait() {
   [[ -n ${CA_FILE:-} ]] || ca_file >/dev/null
-  local ip h code; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
+  local ip h code ok; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
   for h in kc-net1 kc-net2; do
     for _ in $(seq 60); do
-      code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA_FILE" --resolve "$h.localtest.me:443:$ip"         "https://$h.localtest.me$1/") || true
-      [[ $code == 503 ]] && break; sleep 1
+      code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA_FILE" --resolve "$h.localtest.me:443:$ip"         "https://$h.localtest.me/keycloak/admin/") || true
+      if [[ $1 == 503 ]]; then [[ $code == 503 ]] && ok=1 || ok=; else [[ $code =~ ^[1-4] ]] && ok=1 || ok=; fi
+      [[ -n $ok ]] && break; sleep 1
     done
-    [[ $code == 503 ]] || die "freeze: $h.localtest.me$1 still answers ${code:-nothing}, not 503"
+    [[ -n $ok ]] || die "gate: $h.localtest.me/keycloak/admin answers ${code:-nothing}, want $1"
   done
-  sleep "${FREEZE_SETTLE_SECONDS:-2}" # ponytail: admitted admin calls take ms; a fixed settle, not request tracking
-  log "frozen: $*"
 }
-unfreeze() { kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null; log "unfrozen"; }
+
+# freeze: admin + account console (both hosts, k8s/edge/kc-gate.yaml) answer 503 + Retry-After from kc-maint.
+# A selector flip, not an Ingress change: no nginx reload (that dropped Keycloak's pooled IdP connections, build #12).
+freeze() {
+  kubectl apply -f k8s/edge/kc-maint.yaml >/dev/null
+  kubectl -n "$NS" rollout status deploy/kc-maint --timeout=120s >/dev/null
+  gate_select '{"app":"kc-maint"}'
+  gate_wait 503
+  # let requests blue already admitted finish, so no admin/account write commits after the copy point that follows
+  sleep "${FREEZE_SETTLE_SECONDS:-2}" # ponytail: admitted admin calls take ms; a fixed settle, not request tracking
+  log "frozen: /keycloak/admin /keycloak/realms/{demo,master}/account (kc-gate -> kc-maint)"
+}
+unfreeze() {
+  gate_select "$(kc_selector "$(state activeColor)")"
+  gate_wait open
+  log "unfrozen (kc-gate -> kc-$(state activeColor))"
+}
 
 # psql_db <db-cluster> <sql> [database]: run SQL on the cluster's current primary as postgres
 psql_db() {

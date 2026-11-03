@@ -579,8 +579,9 @@ the team would still need this repo's approach.
    - Keep these out of patch releases. Apply them on the lossy path, where they run against green's own DB before
      the switch (`switch-lossy.sh:53`).
    - Replaces the current practice: today's prod pattern (ingress whitelist `127.0.0.1/32` during config-cli)
-     blocks *all* traffic. The `kc-freeze` Ingress (`k8s/edge/kc-freeze.yaml.tpl`) blocks only listed Prefix paths
-     and returns `503 + Retry-After`. It is an improvement and maps to a Gateway HTTPRoute (3.3).
+     blocks *all* traffic. The `kc-gate` Ingress + Service (`k8s/edge/kc-gate.yaml`) blocks only the admin/account Prefix paths
+     and returns `503 + Retry-After`; the freeze flips the Service selector, so nginx never reloads (an Ingress
+     create/delete reload dropped Keycloak's pooled IdP connections: broker callbacks got 500, build #12). It is an improvement and maps to a Gateway HTTPRoute (3.3).
 6. Track a config-cli build for the target Keycloak minor. If none exists, the dropped-field gate is the only
    protection.
 
@@ -767,7 +768,7 @@ Findings and fixes come from the security pipeline (wl:security-pipelines, wl:se
 | Patch (shared DB) | Any 5xx burst or SLO burn after flip -> `rollback.sh` within the hold |
 | Minor/major (lossy) | Abort before `promote` = free. After `promote` and before `switch` = discard green + its DB, unfreeze (nothing lost). After `switch` = lossy rollback, human decision |
 | Rollback | Refuses past the hold (`rollback.sh:15-16`); then fix forward |
-| Stuck freeze | `unfreeze` (`scripts/lib/kc.sh:170`) is idempotent; alert if `kc-freeze` exists for more than the planned window |
+| Stuck freeze | `unfreeze` (`scripts/lib/kc.sh:170`) is idempotent; alert if Service `kc-gate` selects kc-maint for longer than the planned window |
 | Interrupted helm release | Pending release needs `helm uninstall` / rollback before rerun (wl:slice1-platform) |
 
 **On-call**: the switch should run in business hours with the IdP team on call. Lossy windows need someone who can

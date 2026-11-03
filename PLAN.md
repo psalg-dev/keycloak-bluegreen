@@ -87,7 +87,7 @@ KinD "kc": 1 control-plane + 3 workers (labels topology.kubernetes.io/zone=a|b|c
  │   kc-active     plain Service, selector app.kubernetes.io/instance=<color>  <- THE switch
  │   kc-maint      tiny nginx returning 503 + Retry-After: 5 (freeze backend)
  │   Ingress kc          host kc.localtest.me -> kc-active
- │   Ingress kc-freeze   (only during a freeze/lossy window) listed Prefix paths -> kc-maint
+ │   Ingress kc-gate     (permanent) admin/account Prefix paths -> Service kc-gate: active color, kc-maint when frozen
  ├─ legacy ns: legacy-idp (Spring Authorization Server, 1 replica, in-memory sessions), https://legacy.localtest.me
  │             NOT part of blue/green; it is the "outside world" Keycloak brokers to
  └─ load ns: k6 Job
@@ -150,7 +150,7 @@ Kubeconfig via `kind get kubeconfig --internal`.
   scopes (`tenant`), mappers, roles, groups, theme selection, event listeners, additive flows.
 - **maintenance**: breaking changes (rebind browser flow, delete/rename clients or scopes).
   On the minor/major path it runs against green's own DB before the switch, which costs no extra downtime.
-  On the patch (shared-DB) path it needs its own short write-freeze (same `kc-freeze` mechanism, since the DB
+  On the patch (shared-DB) path it needs its own short write-freeze (same `kc-gate` mechanism, since the DB
   is shared). That is the honest limit of blue-green on a shared DB.
 - Settings for all stages: `import.remote-state.enabled=true`, `import.var-substitution.enabled=true`
   (client secrets from env), `import.validate=true`. Keep `import.managed.*` at the defaults except
@@ -347,7 +347,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 
 ## Slice 6: minor case (per-color DB, lossy overlap + replay)
 - **Files**: create `scripts/switch-lossy.sh`, `scripts/replay.sh`, `k8s/postgres/pg-replica.yaml.tpl`,
-  `k8s/edge/{kc-maint.yaml,kc-freeze-ingress.yaml.tpl}`; edit `scripts/lib/kc.sh` (`freeze <paths>`,
+  `k8s/edge/{kc-maint.yaml,kc-gate.yaml}`; edit `scripts/lib/kc.sh` (`freeze`,
   `unfreeze`, `wait_replica_lsn`, `promote_db`)
 - **Contract**: `switch-lossy.sh <target_version>` (shared by minor + major); `demo.sh minor` = reset -> bootstrap blue 26.7.5 -> load -> `switch-lossy.sh 26.8.1` -> `gate.sh lossy`.
   1. Create `pg-<n+1>` as a CNPG replica cluster of `activeDb` (streaming) and wait for it to be streaming.

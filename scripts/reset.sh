@@ -9,7 +9,8 @@ TAG="reset"
 log "reset: removing load, both colors, freeze, config jobs, all DBs (waits for CNPG cleanup)"
 kubectl -n load delete job --all --ignore-not-found >/dev/null 2>&1 || true
 for c in blue green; do helm -n "$NS" uninstall "kc-$c" --wait >/dev/null 2>&1 || true; done
-kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null
+kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null # clusters from before kc-gate
+kubectl apply -f k8s/edge/kc-gate.yaml >/dev/null && gate_select "$(kc_selector blue)" # unfrozen; install starts blue
 kubectl -n "$NS" delete job -l app=config-cli --ignore-not-found >/dev/null
 delete_dbs
 kubectl -n "$NS" delete configmap kc-state --ignore-not-found >/dev/null

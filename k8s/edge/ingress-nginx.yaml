@@ -1,5 +1,5 @@
 # Controller-wide edge hardening, referenced from the ingress-nginx-controller ConfigMap (patched by scripts/up.sh).
-# Controller-wide, not per Ingress: it also covers Ingress kc-freeze, the legacy IdP and anything added later.
+# Controller-wide, not per Ingress: it also covers Ingress kc-gate, the legacy IdP and anything added later.
 #
 # proxy-set-headers: request headers a client could use to pick the issuer/base URL, removed before any backend sees
 # them (empty value = nginx does not send the header). ingress-nginx passes them through untouched otherwise:

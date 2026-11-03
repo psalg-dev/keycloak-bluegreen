@@ -1,4 +1,4 @@
-# Backend for frozen paths (Ingress kc-freeze): 503 + Retry-After, so clients back off instead of writing to a color
+# Backend for frozen paths (Service kc-gate points here during a freeze): 503 + Retry-After, so clients back off instead of writing to a color
 # whose writes would be lost. Only admin + account console are frozen during a lossy window; login/token stay up.
 apiVersion: v1
 kind: ConfigMap

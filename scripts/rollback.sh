@@ -23,7 +23,7 @@ else
   # green had no traffic before the forward switch, so its replay lines start there
   since=$(jq -r 'select(.event == "switch") | .t' out/events.jsonl 2>/dev/null | tail -1)
   since=$(date -u -d "@$(( $(date -u -d "${since:-1 hour ago}" +%s) - 5 ))" +%FT%TZ)
-  freeze /keycloak/admin /keycloak/realms/demo/account /keycloak/realms/master/account
+  freeze
   event rollback_window_start
   scripts/replay.sh "$cur" "$old" "$since"
   event rollback from="$cur" to="$old"

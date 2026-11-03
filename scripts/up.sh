@@ -14,7 +14,7 @@ kube_connect
 
 kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/$INGRESS_NGINX/deploy/static/provider/kind/deploy.yaml" >/dev/null
 kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeout=300s >/dev/null
-# Edge hardening, controller-wide (covers kc, kc-freeze and legacy-idp alike); headers: k8s/edge/ingress-nginx.yaml.
+# Edge hardening, controller-wide (covers kc, kc-gate and legacy-idp alike); headers: k8s/edge/ingress-nginx.yaml.
 # One issuer per host: nginx picks the server case-insensitively and ignores a trailing dot, but forwards the RAW Host
 # as X-Forwarded-Host ($best_http_host = $http_host, nginx.tmpl), so `Host: KC-NET1.LOCALTEST.ME` or
 # `kc-net1.localtest.me.` changed the issuer. $host is nginx's normalised Host (lower case, no port, no trailing dot):

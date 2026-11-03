@@ -12,7 +12,6 @@ target=${1:?target_version}
 active=$(state activeColor) src=$(state activeDb) from=$(state version)
 idle=$([[ $active == blue ]] && echo green || echo blue)
 new=pg-$(( ${src#pg-} + 1 ))
-frozen=(/keycloak/admin /keycloak/realms/demo/account /keycloak/realms/master/account)
 
 # 1. Green's DB: a streaming replica of the active one. 2. Target image ready (keeps the window short).
 DB=$new SRC=$src NS=$NS envsubst < k8s/postgres/pg-replica.yaml.tpl | kubectl apply -f - >/dev/null
@@ -21,7 +20,7 @@ event replica_ready db="$new" source="$src"
 build_image "$target" 1
 
 # 3. Freeze only what must not be lost and isn't replayed: admin + account console.
-freeze "${frozen[@]}"
+freeze
 event window_start
 
 # 4. Copy point: everything the primary had at this LSN is in green's DB (equality never holds: blue keeps writing).
