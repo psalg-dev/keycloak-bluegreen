@@ -9,8 +9,8 @@ phases=(reset install warmup switch rollback cooldown gate)
 eval "$(sed -n '/^phase_tag() {/,/^}/p;/^explain() {/,/^}/p' scripts/demo.sh)"
 mapfile -t cases < <(awk '!/^#/ && NF {print $1}' cases.env)
 for what in "${cases[@]}"; do
+  # shellcheck disable=SC2034 # from/to/fp/tp/mech are read by the eval'd explain()
   read -r _ from to fp tp mech < <(awk -v c="$what" '$1 == c' cases.env)
   for p in "${phases[@]}"; do phase_tag "$p"; explain "$p" >/dev/null 2>&1; done
 done
-# shellcheck disable=SC2034 # from/to/fp/tp/mech are read by the eval'd explain()
 echo "OK test-demo: ${#phases[@]} headers x ${#cases[@]} cases"
