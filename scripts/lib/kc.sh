@@ -183,6 +183,11 @@ admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE
 # cluster under the same name while the old pods still terminate makes CNPG count them, mark the new cluster
 # initialized, then find no PVCs -> "unrecoverable" (2026-11-02; `delete --wait` returns before GC is done).
 delete_dbs() {
+  # Teardown only: skip Postgres' smart shutdown (CNPG default: wait up to 180 s for sessions to end before a fast
+  # shutdown). It protects in-flight transactions in real operations; here the data is being thrown away.
+  local c; for c in $(kubectl -n "$NS" get cluster.postgresql.cnpg.io -o name); do
+    kubectl -n "$NS" patch "$c" --type merge -p '{"spec":{"smartShutdownTimeout":1}}' >/dev/null
+  done
   kubectl -n "$NS" delete cluster.postgresql.cnpg.io --all --cascade=foreground --wait --timeout=600s >/dev/null
   local _; for _ in $(seq 150); do
     [[ -z $(kubectl -n "$NS" get pod,pvc,secret -l cnpg.io/cluster -o name) ]] && return
