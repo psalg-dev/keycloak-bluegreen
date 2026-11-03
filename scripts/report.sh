@@ -15,6 +15,8 @@ V=report/vendor
 (cd "$V" && sha256sum -c chart.umd.min.js.sha256 >/dev/null) || die "$V/chart.umd.min.js does not match its checksum"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+# One jq program: the gate's own definitions first (same rules, excuses, windows), then the report's aggregation.
+cat scripts/gate/prelude.jq scripts/gate/apps.jq report/report.jq > "$tmp/report.jq"
 n=0
 while read -r c from to fp tp mech; do
   d=$out/$c
@@ -24,7 +26,8 @@ while read -r c from to fp tp mech; do
   jq -cR 'fromjson? | select(type == "object" and has("app"))' "$(opt apps.jsonl)" > "$tmp/apps.jsonl"
   syn=""; [[ ! -f $d/SYNTHETIC ]] || syn=$(cat "$d/SYNTHETIC")
   n=$((n + 1))
-  jq -nc -f report/report.jq --slurpfile k "$d/k6.jsonl" --slurpfile e "$(opt events.jsonl)" --slurpfile a "$tmp/apps.jsonl" \
+  jq -nc -f "$tmp/report.jq" --slurpfile k "$d/k6.jsonl" --slurpfile e "$(opt events.jsonl)" --slurpfile a "$tmp/apps.jsonl" \
+    --arg mode "$mech" --argjson grace "${GATE_GRACE_SECONDS:-1}" \
     --slurpfile meta "$(opt meta.json)" --rawfile gate "$(opt gate.txt)" --arg case "$c" --arg from "$from" --arg to "$to" \
     --arg fp "$fp" --arg tp "$tp" --arg mech "$mech" --arg synthetic "$syn" > "$tmp/$(printf %03d $n).json"
   log "$c: $(wc -l < "$d/k6.jsonl") k6 lines${syn:+ (SYNTHETIC)}"

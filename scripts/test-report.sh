@@ -14,16 +14,22 @@ if [[ -n ${1:-} ]]; then
 else
   dir=$(mktemp -d); trap 'rm -rf "$dir"' EXIT
   F=load/fixtures
-  # case | gate mode | k6 fragments | events
+  export GATE_MAX_GAP_SECONDS=60 # sparse fixtures, as in test-gate.sh
+  # case | gate mode | fragments (<f>.k6.jsonl and/or <f>.apps.jsonl, as in test-gate.sh) | events
+  # patch: app- and Keycloak-initiated logouts, all PASS (app-initiated fc with found_session false is no failure);
+  # minor: lossy excuses (lossok) for app- and Keycloak-initiated logouts; major: gate FAILs (probe after replay, bc
+  # logout missing, app login across the switch event without a flipped event) the report must show as over bound.
   while IFS='|' read -r c mode frags events; do
     mkdir -p "$dir/$c"
-    for f in $frags; do cat "$F/$f.k6.jsonl"; done > "$dir/$c/k6.jsonl"
+    for f in $frags; do [[ ! -f $F/$f.k6.jsonl ]] || cat "$F/$f.k6.jsonl"; done > "$dir/$c/k6.jsonl"
+    for f in $frags; do [[ ! -f $F/$f.apps.jsonl ]] || cat "$F/$f.apps.jsonl"; done > "$dir/$c/apps.jsonl"
     cp "$F/$events.events.jsonl" "$dir/$c/events.jsonl"
-    scripts/gate.sh "$mode" "$dir/$c/k6.jsonl" "$dir/$c/events.jsonl" > "$dir/$c/gate.txt" 2>/dev/null || true
+    scripts/gate.sh "$mode" "$dir/$c/k6.jsonl" "$dir/$c/events.jsonl" "$dir/$c/apps.jsonl" > "$dir/$c/gate.txt" 2>/dev/null || true
   done <<'EOF'
-patch|shared|shared-base shared-inflight-ok|shared
+patch|shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-ok|shared
 patch-rollback|shared-rollback|shared-rb-base shared-rb-inflight|shared-rollback
-minor|lossy|lossy-base|lossy
+minor|lossy|lossy-base app-lossy app-lossy-bc app-lossy-kc|lossy
+major|lossy|lossy-base lossy-probe-ok app-lossy app-lossy-flip|lossy
 minor-rollback|lossy-rollback|lossy-rb-base|lossy-rollback
 EOF
 fi
@@ -52,6 +58,17 @@ check "contract has 16 failure-mode ids" jq -e 'length == 16' <<<"$ids"
 check "every case: failure-mode table = contract ids, in order" data --argjson ids "$ids" '[.cases[] | [.modes[].id] == $ids] | all'
 check "no data -> 'nodata' verdict, never a 0 rate" data '[.cases[].modes[] | (.attempts // 0) > 0 or (.verdict == "nodata" and .rate == null)] | all'
 check "every case has a gate verdict and time series" data '[.cases[] | .gate.verdict != null and .series != null] | all'
+# Report and gate never disagree: the report recomputes each gate rule a mode names with the gate's own defs.
+# (1) every named rule is a row of the case's gate.txt with the same state; (2) a mode is "over bound" only if a rule it
+# names FAILed; (3) every FAILed rule makes a mode naming it "over bound" (or "not measured": nothing to judge).
+check "every rule a mode names is a gate row with the same state" data '[.cases[] | (.gate.rules | map({key: .rule, value: .state}) | from_entries) as $g
+  | .modes[].own[] | $g[.rule] == .state] | all'
+check "a mode is over bound only if a gate rule it names FAILed" data '[.cases[].modes[] | select(.verdict == "fail") | any(.own[]; .state == "FAIL")] | all'
+check "every FAILed rule a mode names puts such a mode over bound" data '[.cases[] | .modes as $m | ([$m[].own[].rule] | unique) as $named
+  | .gate.rules[] | select(.state == "FAIL" and (.rule | IN($named[]))) | .rule as $r | any($m[]; (.rules | index($r)) != null and (.verdict == "fail" or .verdict == "nodata"))] | all'
+check "fixtures exercise it: the major case has over-bound modes" data '[.cases[] | select(.case == "major") | .modes[] | select(.verdict == "fail")] | length >= 3'
+check "found_session false on app-initiated fc logouts is no failure (patch)" data '.cases[] | select(.case == "patch") | .modes[] | select(.id == "frontchannel_failed") | .verdict == "ok"'
+check "excused lossy logouts are expected, not over bound (minor)" data '.cases[] | select(.case == "minor") | [.modes[] | select(.id == "backchannel_missing" or .id == "frontchannel_failed" or .id == "logout_not_effective") | .verdict] | all(. == "expected")'
 }
 
 ((bad == 0)) || die "$bad check(s) failed"

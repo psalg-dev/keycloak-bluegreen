@@ -63,6 +63,7 @@ scripts/config.sh online "$idle"
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event switch from="$active" to="$idle"
 set_active "$idle" "$new" "$target"
+event flipped to="$idle" # Service patched: the flip happened in [switch, flipped] (gate: acrossflip)
 sleep "${DRAIN_SECONDS:-15}"
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event replay_done

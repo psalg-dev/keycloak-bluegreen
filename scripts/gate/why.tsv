@@ -38,7 +38,7 @@ app_login_ok	a real app's login (app -> Keycloak -> legacy IdP -> app) must end 
 introspection_ok	resource servers that introspect ask Keycloak on every request; an introspection error or a false "inactive" rejects a logged-in user's API call (a 401 in the middle of their work)
 jwt_ok	resource servers validate JWTs locally against Keycloak's keys and issuer; a rejected JWT from a live session means every API call of that user fails
 app_refresh_ok	apps refresh tokens through their OAuth2 library and do NOT re-login on their own; a lost refresh means the user is thrown out of the app at the next token expiry
-backchannel_delivered	apps learn about a Keycloak logout only through the back-channel call; if it is missing, the app session outlives the logout (the user thinks they logged out but the app still lets them in: security)
+backchannel_delivered	apps learn about a Keycloak logout only through the back-channel call; if it is missing or the app does not act on it (a logout at Keycloak or in another app), the app session outlives the logout (the user thinks they logged out but the app still lets them in: security)
 backchannel_late	slow back-channel delivery widens the time in which an app still serves a session that Keycloak already ended
 frontchannel_ok	front-channel apps are logged out by the browser loading their logout URL from Keycloak's logout page; if the URL is missing or does nothing, the app session survives the logout (security)
 logout_effective	after a user logs out of an app, nothing may keep working with that session; a successful call after logout is a logout that did not protect the user (security)

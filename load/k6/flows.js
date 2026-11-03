@@ -16,7 +16,11 @@
 //   app_login_start|_authorization|_callback|_other (app hops), app_login_<hop above without login_> (KC/IdP hops),
 //   app_me, app_call_jwt, app_call_introspect, app_logout_start|_kc|_legacy|_done, app_frontchannel, app_me_after_logout
 //   and adds (app lines only): registration (bc-net1 ...), sid (from /me, null before it),
-//   upstream_status (calls: the resource server's status from the app's JSON); `error` on calls = the app's JSON error.
+//   upstream_status (calls: the resource server's status from the app's JSON); `error` on calls = the app's JSON error,
+//   initiator (logout lines app_logout_*, app_frontchannel, app_me_after_logout): app = POST /logout at the app (Spring
+//   ends its session first, then Keycloak), kc = the browser goes to Keycloak's end_session directly, like a logout in
+//   another app or the account console, so only the back-/front-channel call can end the app session.
+//   app_logout_start = the first logout request (app: POST /logout, kc: GET end_session).
 //   sub, iss, claims on app_me lines come from the /me response.
 // Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), APP_VUS (6,
 // 0 = no app scenario), DURATION (60m, a cap: load.sh stop ends the run).
@@ -83,7 +87,7 @@ function log(s, scenario, step, t0, res, c, x) {
   console.log(JSON.stringify(Object.assign({ t_start: t0, t_end: now(), scenario, step, status: res.status, error: oauthError(res),
     login_id: s.login_id || null, user: s.user || null, net: s.net, sub: c.sub || null, iss: c.iss || null,
     claims: { login_ctx: c.login_ctx || null, tenant: c.tenant || null } },
-  s.reg ? { registration: s.reg, sid: s.sid || null } : {}, x)));
+  s.reg ? Object.assign({ registration: s.reg, sid: s.sid || null }, s.initiator ? { initiator: s.initiator } : {}) : {}, x)));
 }
 
 export function oauthError(res) {
@@ -247,10 +251,11 @@ export function reads() {
 
 // ---- scenario `app`: a browser using the test client app (docs/test-apps-contract.md)
 
-// which registration: (VU id + iteration) % 4 -> net1/net2 x bc/fc, so the split stays even whatever VU ids k6 assigns
+// which registration + logout initiator: (VU id + iteration) % 8 -> net1/net2 x bc/fc x app/kc, so the split stays
+// even whatever VU ids k6 assigns
 export function appPick(i) {
   const net = i % 2 ? 'net2' : 'net1';
-  return { net, reg: `${Math.floor(i / 2) % 2 ? 'fc' : 'bc'}-${net}` };
+  return { net, reg: `${Math.floor(i / 2) % 2 ? 'fc' : 'bc'}-${net}`, initiator: Math.floor(i / 4) % 2 ? 'kc' : 'app' };
 }
 
 export function appStepOf(method, url) {
@@ -284,7 +289,8 @@ function appGet(s, step, path) {
 }
 
 export function app() {
-  const s = Object.assign(newSession(), appPick(exec.vu.idInTest + exec.vu.iterationInScenario));
+  const pick = appPick(exec.vu.idInTest + exec.vu.iterationInScenario);
+  const s = Object.assign(newSession(), { net: pick.net, reg: pick.reg });
   s.login_id = `${exec.vu.idInTest}-${++seq}`;
   // login: app -> Spring /oauth2/authorization -> Keycloak -> legacy IdP form -> Keycloak -> app callback (code
   // exchange happens in the app); stop after the callback's redirect
@@ -302,12 +308,17 @@ export function app() {
     log(s, 'app', `app_call_${target}`, r.t0, r.res, {}, { upstream_status: r.b.upstream_status ?? null, error: r.b.error || null });
   }
 
-  // RP-initiated logout like a browser: POST /logout (CSRF header) -> Keycloak end_session -> legacy IdP logout ->
-  // Keycloak -> post_logout_redirect_uri on the app. On a page: load every <iframe> (front-channel logout URLs), submit
-  // a form (logout confirm) or follow #continue (what the front-channel page's script does).
-  let method = 'POST', url = `${APP}/logout`, headers = { Accept: HTML, 'X-CSRF-TOKEN': s.csrf || '' }, body = null;
+  // Logout like a browser. initiator app: POST /logout (CSRF header) -> Keycloak end_session -> legacy IdP logout ->
+  // Keycloak -> post_logout_redirect_uri on the app. initiator kc: GET Keycloak end_session with the browser's Keycloak
+  // cookies only (no id_token_hint, so Keycloak shows its logout-confirm form, submitted as-is) while the app still holds
+  // its session; ends on Keycloak's "logged out" page. On a page: load every <iframe> (front-channel logout URLs),
+  // submit a form (logout confirm) or follow #continue (what the front-channel page's script does).
+  s.initiator = pick.initiator;
+  const kcInit = s.initiator === 'kc';
+  let method = kcInit ? 'GET' : 'POST', url = kcInit ? `${kc(s.net)}/protocol/openid-connect/logout` : `${APP}/logout`;
+  let headers = kcInit ? { Accept: HTML } : { Accept: HTML, 'X-CSRF-TOKEN': s.csrf || '' }, body = null;
   for (let i = 0; i < 10; i++) {
-    const step = logoutStepOf(url), t0 = now();
+    const step = i === 0 ? 'app_logout_start' : logoutStepOf(url), t0 = now();
     const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers, tags: { name: step } });
     log(s, 'app', step, t0, res, {});
     headers = { Accept: HTML };

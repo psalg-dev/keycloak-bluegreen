@@ -19,6 +19,7 @@ event rollback_start reason="${REASON:-drill}" from="$cur" to="$old"
 if [[ $curdb == "$olddb" ]]; then
   event rollback from="$cur" to="$old"
   set_active "$old" "$olddb" "$oldv"
+  event flipped to="$old"
 else
   # green had no traffic before the forward switch, so its replay lines start there
   since=$(jq -r 'select(.event == "switch") | .t' out/events.jsonl 2>/dev/null | tail -1)
@@ -28,6 +29,7 @@ else
   scripts/replay.sh "$cur" "$old" "$since"
   event rollback from="$cur" to="$old"
   set_active "$old" "$olddb" "$oldv"
+  event flipped to="$old"
   sleep "${DRAIN_SECONDS:-15}"
   scripts/replay.sh "$cur" "$old" "$since"
   event rollback_replay_done

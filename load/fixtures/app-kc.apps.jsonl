@@ -1,0 +1,2 @@
+{"app":"testclient","t":"2026-11-02T22:10:12.500Z","event":"login","registration":"bc-net1","sub":"5f0c2a7e-91d3-4b6a-8e2f-000000000603","sid":"sid-k1","iss":"https://kc-net1.localtest.me/keycloak/realms/demo"}
+{"app":"testclient","t":"2026-11-02T22:10:13.500Z","event":"login","registration":"fc-net2","sub":"5f0c2a7e-91d3-4b6a-8e2f-000000000604","sid":"sid-k2","iss":"https://kc-net2.localtest.me/keycloak/realms/demo"}

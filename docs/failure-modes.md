@@ -20,7 +20,7 @@ cool down 90 s, stop the load, gate (`scripts/demo.sh`).
 | `refresh` | 10 VUs, one refresh every 5 s | holds a session and refreshes it; on `invalid_grant` a silent re-login (`relogin`) through the legacy IdP's SSO. Half the VUs start a new session every 60 s, so sessions are born on every color. |
 | `logout` | 4 VUs, one logout per VU every ~45 s | login, RP-initiated logout (`id_token_hint`, following the brokered round trip), then probes the logged-out refresh token every 5 s until the end (`logout_probe`, must get `invalid_grant`). |
 | `reads` | 1/s per network | discovery + JWKS. |
-| `app` (contract, not built yet) | per contract | browser login through the test client app, `/call/jwt` and `/call/introspect` every 5 s, RP logout with back- or front-channel delivery. |
+| `app` | 6 VUs | browser login through the test client app, `/call/jwt` and `/call/introspect` every 5 s for 30-120 s, then a logout with back- or front-channel delivery: half `initiator: app` (POST /logout at the app, which ends its own session first), half `initiator: kc` (the browser logs out at Keycloak's end_session directly while the app holds its session: only the channel call can end it). |
 
 Roughly 60-70 k6 requests/s, ~30 000 lines per case. Every request is one JSON line (schema at the top of
 `flows.js`); the switch scripts write one JSON line per step to `events.jsonl` (`event` in `scripts/lib/kc.sh`). The
@@ -41,8 +41,12 @@ clock (KinD containers on one machine). A request belongs to the moment it start
 The gate's own windows are event boundaries, used per rule: before/after `switch`; the lossy window
 [`copy_point`, `switch`]; the resurrection window [`switch`, `replay_done` + 1 s]; for rollbacks [`switch`,
 `rollback`) and [`rollback`, `rollback_replay_done` + 1 s]. The report uses exactly those for "expected".
+The flip itself (the Service selector patch) happens AFTER the `switch` / `rollback` event: the scripts write the event,
+then `set_active` reads state and patches, then write `flipped`. "A login across a flip" means a hop before the flip
+window's end and one at/after its start, flip window = [`switch`, `flipped` + 1 s] (the 1 s: ingress-nginx following
+the endpoints); runs without `flipped` use the event alone (`acrossflip` in `scripts/gate/prelude.jq`).
 
-**Exclusions** (same as the gate): requests with status 0 that start at/after `load_stop` are k6 aborting itself on
+**Exclusions** (same as the gate): requests with status 0 still in flight at `load_stop` (ending at/after it; by end, since build #20 had one started 17 ms before) are k6 aborting itself on
 SIGINT, not server behaviour; they are counted ("aborted") and judged by no rule. Logins still in their think time at
 the end of the data (no failed hop, no token, last hop < 30 s before the end) are not judged.
 
@@ -64,11 +68,17 @@ mechanism, **unexpected** = occurrences outside that bound, which gate rule **en
 |---|---|
 | OK | count 0 |
 | expected | count > 0, all inside the mechanism's bound (e.g. lossy sessions born in the window) |
-| over bound | unexpected > 0 and a gate rule enforces the mode (the gate should have failed) |
-| over bound (not gated) | unexpected > 0, the mode is report-only |
+| over bound | a gate rule the mode names FAILed on items of this mode's class (the gate failed too) |
+| over bound (not gated) | unexpected > 0 among occurrences no gate rule judges (report-only part of the mode) |
 | not measured (no data) | no source lines, or 0 attempts. Never shown as 0 |
 
-"Report only" means only the report judges it as of this commit; the k6/gate work for the apps may add gate rules.
+**Report and gate cannot disagree.** `scripts/report.sh` runs the gate's own jq (`scripts/gate/prelude.jq`,
+`scripts/gate/apps.jq`) in front of `report/report.jq`: for every gate-enforced mode the report recomputes the gate
+rules it names ("enforced by") with the same definitions and excuses (`lossok`, flips, grace, the apps.jsonl range),
+and the gated part of "unexpected" is the number of those rules' offending items of this mode's class. A rule that
+FAILs with nothing to judge (no data) puts its primary mode over bound. `scripts/test-report.sh` checks on fixtures
+that every rule a mode names has the same state as the gate.txt row, and that over bound <=> a named rule FAILed.
+"Report only" means no gate rule judges those occurrences; its bound is stated in "expected" and computed as stated.
 
 ## The modes
 
@@ -88,39 +98,49 @@ mechanism, **unexpected** = occurrences outside that bound, which gate rule **en
 ### `net_error`
 - **Definition**: status 0 (connection refused/reset, timeout) not caused by the k6 stop.
 - **Experienced as**: a hung or failed request with no response at all.
-- **Detected**: k6 lines with `status == 0`, minus those starting at/after `load_stop`.
+- **Detected**: k6 lines with `status == 0`, minus those still in flight at `load_stop` (ending at/after it).
 - **Causes**: connections cut when a pod dies or the selector flips, ingress upstream gone, TLS problems (a stale
   demo CA once produced 353/353 status 0).
 - **Expected**: 0. **Enforced**: gate `no_5xx` (it counts status 0 too).
-- **Blind spots**: k6's 60 s request timeout means a slow-but-alive answer is not a net error; a status-0 line right
-  before `load_stop` that k6 aborted is counted (the exclusion starts at the event).
+- **Blind spots**: k6's 60 s request timeout means a slow-but-alive answer is not a net error; a status-0 line that
+  failed and ended just before `load_stop` is counted (the exclusion starts at the event).
 
 ### `login_failed`
 - **Definition**: a login (direct or via the app) that does not end with tokens / an app session.
 - **Experienced as**: an error page or a login loop; the user has to start again.
-- **Detected**: k6 login hops grouped by `login_id`. Direct login = success iff it has a `login_token` with 200.
-  App login (steps `app_login_*`) = success iff no hop is status 0 or >= 400 [assumed until the app scenario exists].
-  Failed = a hop >= 400 / status 0, or no token and the last hop more than 30 s before the end. Attempts = judged
-  logins. Time = end of the last hop.
+- **Detected**: direct logins: k6 login hops grouped by `login_id`, success iff it has a `login_token` with 200;
+  failed = a hop >= 400 / status 0, or no token and the last hop more than 30 s before the end; time = end of the last
+  hop. App logins: exactly the gate's `app_login_ok` (success iff its `/me` got 200; a Spring callback that redirects
+  to `/login?error` is a 302, so hop statuses alone would miss it); time = the `/me`. Attempts = both.
 - **Causes**: shared DB: any server error during the flip. Lossy: the auth session of a login that started on blue
   after `copy_point` is not in green's DB, so its broker callback on green fails (in-window code exchange
   `invalid_grant` too). Rollback (lossy): the same for logins started on green before the flip back.
-- **Expected**: shared 0; lossy only logins straddling the switch (and the rollback for `minor-rollback`).
-- **Enforced**: report only. The gate checks the straddling logins on the shared path (`inflight_login`) and the
-  re-login after a lost session (`relogin_ok`), not logins in general.
+- **Expected**: shared 0; lossy only logins across a flip (a hop before the flip window's end, one at/after its start;
+  flip window = [`switch`, `flipped` + 1 s], plus the rollback's for `minor-rollback`).
+- **Enforced**: app logins: gate `app_login_ok` (same excuse). Direct logins: report only (the gate checks the
+  straddling ones on the shared path, `inflight_login`, and the re-login after a lost session, `relogin_ok`); their
+  unexpected failures are listed under the mode (end of last hop, s relative to t = 0).
+- **Build #14 (minor)**: 54 failed of 3811, 20 unexpected against "straddling the switch", gate PASS. Not a gate/report
+  disagreement: `app_login_ok` passed with the same excuse, so the 20 were direct logins, which no lossy gate rule
+  judges [deduced from the code, not the data]. Cause [assumed]: the `switch` event is written BEFORE `set_active`
+  (3 kubectl reads + the Service patch, then ingress-nginx), so logins starting in the first seconds "after the
+  switch" still began on blue and failed on green, counted outside "straddling the switch event". Verify on the next
+  run: the listed unexpected times cluster in [0, `flipped` + 1 s] and disappear from "unexpected" with `flipped`.
 - **Blind spots**: a login abandoned at a form k6 does not recognise counts as failed; logins cut off by the k6 stop
   are excluded.
 
 ### `inflight_login_broken`
 - **Definition**: a login whose hops straddle a flip (a hop before `switch`/`rollback`, the next after) and that fails.
 - **Experienced as**: the user typed their password on the legacy IdP, came back to Keycloak and got an error.
-- **Detected**: as `login_failed`, restricted to logins with first hop < flip <= last hop. Attempts = straddling logins.
+- **Detected**: the gate's `inflight` sets: direct logins (app logins are `app_login_ok`'s) with a hop before the
+  `switch`/`rollback` event and the next at/after it; failed = a hop >= 400 / status 0 or no `login_token` 200.
+  Attempts = straddling logins.
 - **Causes**: auth sessions not shared between colors (shared DB without `stateless`: the planned negative control),
   or not in the new color's DB (lossy). This is the mode the shared-DB mechanism exists to remove.
 - **Expected**: shared 0; lossy only logins started after `copy_point` (or straddling the rollback).
 - **Enforced**: gate `inflight_login` (+ `inflight_login_rollback`) on the shared path; report only on lossy.
-- **Blind spots**: ~50 straddling logins per flip at 5 logins/s; a rare race needs more. The gate counts every
-  straddling login, the report leaves out those cut off by the k6 stop (one fewer in build #6: 53 vs 54).
+- **Blind spots**: ~50 straddling logins per flip at 5 logins/s; a rare race needs more. Report and gate count the
+  same set (since 2026-11-03; before, the report left out logins cut off by the k6 stop: 53 vs 54 in build #6).
 
 ### `refresh_lost_session`
 - **Definition**: a refresh gets `invalid_grant` (direct, or via the app's OAuth2 client manager): the session is gone.
@@ -134,7 +154,8 @@ mechanism, **unexpected** = occurrences outside that bound, which gate rule **en
 - **Expected**: shared 0. lossy: only sessions born in [`copy_point`, `switch`]. lossy-rollback: born in
   [`copy_point`, `switch`] and lost before `rollback` + 1 s, or born in (`switch`, `rollback`) and lost after it.
 - **Enforced**: gate `no_invalid_grant` (shared), `invalid_grant_in_window` / `invalid_grant_phases` + `relogin_ok`
-  (lossy). The lossy numbers `sessions_lost`, `relogins` are reported.
+  (lossy), the `invalid_grant` part of the `refresh_*` session rules and of `app_refresh_ok`. The lossy numbers
+  `sessions_lost`, `relogins` are reported.
 - **Blind spots**: k6 drops a lost token after the first `invalid_grant`, so each lost session counts once; offline
   tokens are not exercised; `window_sessions_back` (window sessions refreshing after a rollback) is structurally ~0.
 
@@ -143,38 +164,42 @@ mechanism, **unexpected** = occurrences outside that bound, which gate rule **en
 - **Experienced as**: as a lost session, but not expected by any mechanism.
 - **Detected**: refresh lines/events not 200, not `invalid_grant`, not status 0 (that is `net_error`).
 - **Causes**: token endpoint errors during the flip, a client/realm config difference between colors.
-- **Expected**: 0. **Enforced**: partly: `refresh_across_switch` (shared) / `refresh_pre_copy` (lossy) require every
-  refresh of sessions born before the switch / copy point to be 200; later sessions are report only.
+- **Expected**: 0. **Enforced**: partly: the `refresh_*` session rules (`refresh_across_switch` shared,
+  `refresh_pre_copy` lossy, + the rollback ones) require every refresh of sessions born before the switch / copy point
+  to be 200 (a rule with no such refresh at all FAILs and puts this mode over bound); `app_refresh_ok` gates the app's
+  refreshes. k6 refreshes of later sessions are report only ("over bound (not gated)").
 - **Blind spots**: as `refresh_lost_session`.
 
 ### `introspection_error`
 - **Definition**: the resource server's introspection call to Keycloak failed (5xx, timeout, connect error).
 - **Experienced as**: an API answering 503 although the token is fine.
-- **Detected**: testresource `introspection` events with `error != null` or `http_status != 200`.
-  Attempts = introspection events. No apps lines -> not measured.
+- **Detected**: the gate's `introspection_ok` errors: testresource `introspection` events with `error != null` or
+  `http_status != 200`, and k6 `app_call_introspect` lines with upstream 5xx / 0. Attempts = introspection events + k6
+  introspect calls. No app lines -> not measured.
 - **Causes**: the introspection endpoint hit during the flip/kill, connection pool to the old color.
-- **Expected**: 0. **Enforced**: report only.
+- **Expected**: 0. **Enforced**: gate `introspection_ok`.
 - **Blind spots**: one resource server replica, no cache (deliberately: it measures Keycloak), so real APIs with an
   introspection cache would see less.
 
 ### `introspection_false_inactive`
 - **Definition**: introspection says `active: false` for a token whose session is alive (not logged out).
 - **Experienced as**: an API rejecting (401) a logged-in user's valid token.
-- **Detected**: testclient `call` events to `introspect` with `upstream_status == 401` and no client error, for a sid
-  with no logout (`logout_initiated` / `backchannel_logout` / `frontchannel_logout`) before the call. Attempts =
-  such calls with upstream 200/401 on live sids.
+- **Detected**: k6 `app_call_introspect` lines with upstream 401 (k6 never calls after its own logout, so the
+  session is alive); excused under `lossok` (born per the app callback). Attempts = k6 introspect calls with upstream
+  200/401. Same set as the gate's `introspection_ok`.
 - **Causes**: session not on the color that answers (lossy window sessions, as `refresh_lost_session`).
 - **Expected**: shared 0; lossy only sessions born in [`copy_point`, `switch`] (lossy-rollback: the lossy rules).
-- **Enforced**: report only.
-- **Blind spots**: depends on the testclient logging the sid on every call; the join is by sid only.
+- **Enforced**: gate `introspection_ok`.
+- **Blind spots**: a 401 caused by an expired access token would count too (the app refreshes 30 s before expiry).
 
 ### `jwt_rejected`
 - **Definition**: the resource server rejects a JWT from a live session (signature or issuer).
 - **Experienced as**: 401 from an API with a fresh, valid token.
-- **Detected**: testclient `call` events to `jwt` with `upstream_status == 401` and no client error, on a live sid.
+- **Detected**: k6 `app_call_jwt` lines that reached the resource server (upstream status set) with upstream != 200.
+  Attempts = those calls. Same set as the gate's `jwt_ok`.
 - **Causes**: signing keys differing between colors (they live in the realm, in the DB, and the lossy copy carries
   them), an issuer change, a JWKS cache that does not know a new key.
-- **Expected**: 0 in every case. **Enforced**: report only.
+- **Expected**: 0 in every case. **Enforced**: gate `jwt_ok`.
 - **Blind spots**: no key rotation happens during the cases.
 
 ### `issuer_mismatch`
@@ -198,40 +223,52 @@ mechanism, **unexpected** = occurrences outside that bound, which gate rule **en
 ### `logout_not_effective`
 - **Definition**: refresh (or the app session) still works after the logout completed.
 - **Experienced as**: a security issue: a logged-out session is resurrected.
-- **Detected**: k6 `logout_probe` lines with status 200, plus `app_me_after_logout` with 200. Attempts = probes.
+- **Detected**: k6 `logout_probe` lines with status 200, plus `app_me_after_logout` not 401. Attempts = both.
 - **Causes**: shared: logout not propagated (seen live: k6 stopped at the first redirect of a brokered logout, so
   1366/1368 sessions stayed alive; fixed in k6). Lossy: a logout on blue after `copy_point` is not in green's DB
   until the replay; between `switch` and `replay_done` it is alive on green (the "resurrection window",
-  `resurrection_seconds`). Rollback: the same in reverse until `rollback_replay_done`.
-- **Expected**: shared 0; lossy only in [`switch`, `replay_done` + 1 s) (and [`rollback`, `rollback_replay_done` + 1 s)).
+  `resurrection_seconds`). Rollback: the same in reverse until `rollback_replay_done`. App: a Keycloak-initiated
+  logout of a session Keycloak no longer knows (lossy window) reaches no app: the app session survives.
+- **Expected**: shared 0; lossy probes only in [`switch`, `replay_done` + 1 s) (and [`rollback`,
+  `rollback_replay_done` + 1 s)), app `/me` only for Keycloak-initiated logouts excused by `logout_effective`.
 - **Enforced**: gate `logout_probe_never_ok` (shared), `logout_after_replay` (+ `logout_after_rollback_replay`) for
-  probes after the replay only.
+  probes after the replay, `logout_effective` for the app (`/me` 401, no successful call after the logout). Lossy
+  probes with 200 before the switch are judged by no rule (report only).
 - **Blind spots**: replay reads Keycloak's stdout (`replay.sh`): a log line lost to rotation or a recreated pod is a
   silently lost logout (`docs/production-readiness.md` recommends an outbox table). 1 s grace for a stale cache.
   Only ~4 logouts per lossy window at the current rate.
 
 ### `backchannel_missing`
-- **Definition**: an RP-initiated logout of a `bc` session without a matching back-channel logout at the app within 10 s.
+- **Definition**: a logout of a `bc` session without a matching ok back-channel logout at the app within 10 s, or
+  (initiator `kc`) delivered but the app session not ended.
 - **Experienced as**: the app keeps its local session after the user logged out at Keycloak.
-- **Detected**: testclient `logout_initiated` with a `bc-*` registration, matched by sid to `backchannel_logout`
-  with `ok: true` within 10 s. Logouts in the last 10 s of the data are not judged.
+- **Detected**: the gate's `bc_judged`: completed k6 logouts of `bc-*` sessions (start = `app_logout_start`), matched
+  by sid to a `backchannel_logout` with `ok: true` within 10 s; for initiator `kc` also `/me` 401 after it. Spring
+  answers 200 for a sid it holds no session for, so `ok: true` alone is delivery; with initiator `app` the app had
+  already ended the session itself, so only `kc` logouts measure the effect. Logouts outside the apps.jsonl time range
+  (or in its last 10 s) are not judged.
 - **Causes**: the color handling the logout cannot reach the app (NetworkPolicy, DNS), the session not known to
-  that color (lossy window), a logout replayed through the admin API without back-channel delivery.
-- **Expected**: 0. **Enforced**: report only.
+  that color (lossy window), a logout replayed through the admin API without back-channel delivery; without effect:
+  the app's sid registry (Spring's OIDC session registry) not finding the session.
+- **Expected**: 0; lossy: undelivered only for sessions lost in the window (`lossok`). Delivered without effect is
+  never expected. **Enforced**: gate `backchannel_delivered`.
 - **Blind spots**: one app replica; the delay is measured from the app's own log line, not from Keycloak.
 
 ### `backchannel_late`
 - **Definition**: delivered, but more than 2 s after the logout.
-- **Detected**: as above, delay > 2 s. Attempts = delivered back-channel logouts.
-- **Expected**: 0. **Enforced**: report only.
+- **Detected**: as above, delay in (2 s, 10 s]. Attempts = judged logouts delivered within 10 s.
+- **Expected**: 0. **Enforced**: report only (gate `backchannel_late` is INFO).
 
 ### `frontchannel_failed`
 - **Definition**: an `fc` logout whose front-channel URL was missing from Keycloak's logout page or did not end the
   app session.
 - **Experienced as**: the app stays logged in after a browser logout.
-- **Detected**: testclient `logout_initiated` with an `fc-*` registration without a `frontchannel_logout` with
-  `found_session: true` for that sid within 10 s.
-- **Expected**: 0. **Enforced**: report only.
+- **Detected**: the gate's `fc_judged`: completed k6 logouts of `fc-*` sessions; failed = no iframe on the logout
+  page, an iframe fetch not 200, no `frontchannel_logout` at the app for the sid (inside the apps.jsonl range), `/me`
+  not 401 after; initiator `kc` also `found_session` never true. For initiator `app`, `found_session: false` is no
+  failure: the app's POST /logout ended the session before Keycloak's call (build #14: 25/25; the report used to count
+  those as failed, the gate did not).
+- **Expected**: 0; lossy: undelivered only for sessions lost in the window (`lossok`). **Enforced**: gate `frontchannel_ok`.
 - **Blind spots**: k6 fetches the iframes like a browser would, but no real browser (third-party cookie rules) is involved.
 
 ### `latency_regression`
@@ -254,7 +291,7 @@ writes `<out-dir>/report.html`: one self-contained page (~250-310 KB), an Overvi
 Chart.js 4.6.1 is inlined from `report/vendor/` (checksum in `chart.umd.min.js.sha256`, verified on every run; the
 MIT header stays in the file, the full license is `chart.js.LICENSE.md`); the data is one embedded JSON blob. No
 fetches at view time. Needs bash, jq 1.7+ and coreutils (launcher and Jenkins images).
-Aggregation: `report/report.jq`, one jq run per case (2 s rate buckets, 10 s latency buckets with p50/p95/p99,
+Aggregation: `report/report.jq` (run behind the gate's `scripts/gate/prelude.jq` + `apps.jq`, one program), one jq run per case (2 s rate buckets, 10 s latency buckets with p50/p95/p99,
 per-window CDF bins, the failure-mode table); drawing: `report/template.html`.
 Test: `bash scripts/test-report.sh` (input built from `load/fixtures`) or `bash scripts/test-report.sh out/samples`.
 

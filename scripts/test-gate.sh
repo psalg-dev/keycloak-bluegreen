@@ -55,6 +55,13 @@ app-fc-no-url      |shared|shared-base shared-inflight-ok app-shared app-shared-
 app-fc-no-event    |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc              |shared|1|frontchannel_ok=FAIL
 app-me-200         |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-me-200 |shared|1|frontchannel_ok=FAIL logout_effective=FAIL
 app-call-after-out |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-call-after-logout |shared|1|logout_effective=FAIL
+app-kc-pass        |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-ok |shared|0|backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS app_login_ok=PASS
+app-kc-bc-notfound |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-notfound app-kc-fc-ok |shared|1|backchannel_delivered=FAIL logout_effective=FAIL
+app-kc-fc-notfound |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-notfound |shared|1|frontchannel_ok=FAIL
+app-kc-me-200      |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-me200 |shared|1|frontchannel_ok=FAIL logout_effective=FAIL
+app-lossy-kc       |lossy |lossy-base app-lossy app-lossy-bc app-lossy-kc        |lossy |0|app_login_ok=PASS backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS
+app-flip-no-event  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy |1|app_login_ok=FAIL
+app-flip-flipped   |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy-flipped|0|app_login_ok=PASS
 app-lossy-pass     |lossy |lossy-base app-lossy app-lossy-bc                   |lossy |0|app_login_ok=PASS introspection_ok=PASS jwt_ok=PASS app_refresh_ok=PASS backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS
 app-lossy-precopy  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-precopy-inactive |lossy |1|introspection_ok=FAIL
 app-lossy-bc-miss  |lossy |lossy-base app-lossy                                |lossy |1|backchannel_delivered=FAIL

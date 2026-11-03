@@ -75,10 +75,21 @@ authorization request. Spring's `OAuth2AuthorizedClientManager` refreshes tokens
 ## k6 (new scenario `app`, in addition to the existing ones)
 Each VU: pick net1|net2 and bc|fc, browse `https://app.localtest.me/login/{bc|fc}-netN` through the whole redirect
 chain (Keycloak -> legacy IdP form -> back), then `/me`, then every 5 s alternate `/call/jwt` and `/call/introspect`
-for a random 30-120 s, then `POST /logout` following the chain like a browser. For `fc` sessions, k6 fetches every
-`<iframe src>` on Keycloak's logout page (the front-channel URLs) like a browser would. Then `/me` must be 401.
+for a random 30-120 s, then log out following the chain like a browser, half of the logouts each way:
+- `initiator: app`: `POST /logout` at the app. Spring ends its own session first, then redirects to Keycloak's
+  end_session; the back-/front-channel call that follows finds no session at the app (it only proves delivery).
+- `initiator: kc`: the browser goes to Keycloak's end_session directly (`GET .../protocol/openid-connect/logout` with
+  its Keycloak cookies, no `id_token_hint`, so Keycloak shows its logout-confirm form, which k6 submits), like a logout
+  in another app or the account console, while the app still holds its session. Only the back-channel call (bc) or
+  the front-channel iframe (fc) can end the app session, so it measures their effect.
+
+For `fc` sessions, k6 fetches every `<iframe src>` on Keycloak's logout page (the front-channel URLs) like a browser
+would. Then `/me` must be 401. Correlation app <-> Keycloak is by `sid` (the logout token's / the front-channel URL's).
 k6 line schema: the existing one (top of `load/k6/flows.js`) with `scenario:"app"` and steps
 `app_login_*`, `app_me`, `app_call_jwt`, `app_call_introspect`, `app_logout_*`, `app_frontchannel`, `app_me_after_logout`.
+Logout lines (`app_logout_*`, `app_frontchannel`, `app_me_after_logout`) add `initiator: "app"|"kc"`;
+`app_logout_start` is the first logout request (app: `POST /logout`, kc: `GET` end_session). Lines without
+`initiator` (older runs) are `app`. The apps' own log lines are unchanged (a kc logout has no `logout_initiated`).
 Collection: `load.sh collect` also writes the two apps' stdout JSON lines to `out/apps.jsonl`
 (`kubectl logs` with `--since-time` of the load start).
 
@@ -97,9 +108,9 @@ Collection: `load.sh collect` also writes the two apps' stdout JSON lines to `ou
 | `issuer_mismatch` | token `iss` not the one of its network | k6 |
 | `sub_changed` | same user, different `sub` | k6 |
 | `logout_not_effective` | refresh/introspection still OK after logout completed | k6 + testresource |
-| `backchannel_missing` | RP-initiated logout of a `bc` session without a matching back-channel logout at the app within 10 s | k6 + testclient |
+| `backchannel_missing` | logout of a `bc` session without a matching ok back-channel logout at the app within 10 s, or (initiator kc) delivered but the app session not ended (`/me` not 401) | k6 + testclient |
 | `backchannel_late` | delivered, but > 2 s after the logout | k6 + testclient |
-| `frontchannel_failed` | an `fc` logout whose front-channel URL was missing from the page or did not end the app session | k6 + testclient |
+| `frontchannel_failed` | an `fc` logout whose front-channel URL was missing from the page or did not end the app session (initiator kc: `found_session` not true) | k6 + testclient |
 | `latency_regression` | p95 latency of a step in the cutover window > 2x its pre-switch baseline | k6 |
 
 Every mode is reported per scenario as count, rate (per relevant attempts), and time distribution relative to the

@@ -1,0 +1,1 @@
+{"t_start":"2026-11-02T22:10:37.300Z","t_end":"2026-11-02T22:10:37.308Z","scenario":"app","step":"app_me_after_logout","status":200,"error":null,"login_id":"30-1","user":"user0603","net":"net1","sub":null,"iss":null,"claims":{"login_ctx":null,"tenant":null},"registration":"bc-net1","sid":"sid-k1","initiator":"kc"}

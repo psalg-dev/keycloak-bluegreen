@@ -1,8 +1,9 @@
-# report.jq: one case -> the aggregate report/template.html draws. Run by scripts/report.sh:
-#   jq -n -f report/report.jq --slurpfile k <k6.jsonl> --slurpfile e <events.jsonl> --slurpfile a <apps lines>
-#     --slurpfile meta <meta.json> --rawfile gate <gate.txt> --arg case/from/to/fp/tp/mech/synthetic ...
-# Semantics shared with scripts/gate.sh (keep in sync, gate.sh is not sourceable from jq): ts, the load_stop exclusion
-# of k6 self-aborts, session birth = t_end of its login_token, the lossy windows, GRACE = 1 s.
+# report.jq: one case -> the aggregate report/template.html draws. Run by scripts/report.sh AFTER the gate's own jq
+# (scripts/gate/prelude.jq + scripts/gate/apps.jq, concatenated into one program, same bindings):
+#   jq -n -f <prelude+apps+report.jq> --slurpfile k <k6.jsonl> --slurpfile e <events.jsonl> --slurpfile a <apps lines>
+#     --arg mode <mech> --argjson grace <s> --slurpfile meta <meta.json> --rawfile gate <gate.txt> --arg case/from/to/...
+# Every gate-enforced failure mode takes its verdict from the gate's own rule defs (r_*, *_sets, *_judged), so report
+# and gate cannot disagree: a mode is "over bound" iff a gate rule it names FAILs on items of this mode's class.
 # Failure-mode ids and their expectations: docs/test-apps-contract.md, docs/failure-modes.md.
 # Must run on jq 1.7 (Jenkins image, Debian 13) and 1.8 (launcher): every `if` has an `else`.
 
@@ -25,12 +26,8 @@ def cls:
   elif hop then (if .status >= 400 then "login_failed" else null end)
   elif .status >= 400 then "other_4xx" else null end;
 
-1 as $grace
-| ($e | map(.event)) as $names
-| ($k | map(. + {ts: (.t_start | ts), te: (.t_end | ts)})) as $all
-| ev("load_stop") as $ls
-| [$all[] | select(.status == 0 and $ls != null and .ts >= $ls)] as $aborted
-| [$all[] | select((.status == 0 and $ls != null and .ts >= $ls) | not)] as $L
+($e | map(.event)) as $names
+# $all, $ls, $aborted, $L (the k6 self-abort exclusion) come from scripts/gate/prelude.jq, as in the gate
 | ev("switch") as $sw | ev("copy_point") as $cp | ev("replay_done") as $rd
 | ev("rollback_start") as $rbs | ev("rollback") as $rb | ev("rollback_replay_done") as $rrd
 | ($mech | sub("-rollback$"; "")) as $base
@@ -48,67 +45,82 @@ def cls:
 
 # --- app lines (testclient / testresource, contract schema); [] until the apps exist
   [$a[] | select(.t != null) | . + {ts: (.t | ts)}] as $A
-| ([$A[].ts] | max) as $aend
-| ([$A[] | select(.app == "testclient" and .event == "login" and .sid != null) | {key: .sid, value: .ts}] | from_entries) as $abirth
-| ([$A[] | select(.app == "testclient" and .sid != null and (.event == "logout_initiated" or .event == "backchannel_logout" or .event == "frontchannel_logout"))]
-   | group_by(.sid) | map({key: .[0].sid, value: (map(.ts) | min)}) | from_entries) as $aout
-| def alive: $aout[.sid // ""] as $o | $o == null or .ts < $o;
 
 # --- sessions and logins (gate semantics)
-  ([$L[] | select(.step == "login_token" and .status == 200) | {key: .login_id, value: .te}] | from_entries) as $born
+| ([$L[] | select(.step == "login_token" and .status == 200) | {key: .login_id, value: .te}] | from_entries) as $born
 | def born: $born[.login_id // ""];
   ([$aborted[].login_id | select(. != null)] | unique) as $abl
 | ([$L[] | select(hop)] | group_by(.login_id) | map(sort_by(.ts))) as $hopsets
 | [$hopsets[] | . as $h
     | {first: $h[0].ts, last: $h[-1].ts, te: $h[-1].te, id: $h[0].login_id,
-       ok: (if any($h[]; .step | startswith("app_login_")) then all($h[]; .status > 0 and .status < 400)
-            else any($h[]; .step == "login_token" and .status == 200) end),
+       ok: any($h[]; .step == "login_token" and .status == 200), app: any($h[]; .step | startswith("app_login_")),
        bad: any($h[]; .status >= 400 or .status == 0)}
     | select(.id as $id | any($abl[]; . == $id) | not)
-    | select(.ok or .bad or .last < $end - 30)] as $logins   # still thinking at the end = not judged
-| def straddles($t): $t != null and .first < $t and .last >= $t;
-# a refresh invalid_grant at $t of a session born at $b that this mechanism loses by design (gate.sh rules)
-  def lost_ok($t; $b):
-    if $base == "shared" then false
-    elif $mech == "lossy" then ($b | inw($cp; $sw))
-    else ($b | inw($cp; $sw)) and $t >= $sw and $t < ($rb // 1e18) + $grace
-      or ($b != null and $sw != null and $rb != null and $b > $sw and $b < $rb and $t >= $rb) end;
-  def probe_ok($t): $base == "lossy" and
-    (($t | inw($sw; ($rd // 1e18) + $grace)) or ($rb != null and ($t | inw($rb; ($rrd // 1e18) + $grace))));
+    | select(.app or .ok or .bad or .last < $end - 30)] as $logins   # direct logins still thinking at the end = not judged
 
-# --- failure modes: {attempts (null = no source data), occ: [times], unexp: n, ...}
-  def mode($id; $att; $occ; $unexp; $exp; $gate):
-    {id: $id, attempts: $att, count: ($occ | length), unexpected: $unexp, expected: $exp, gate: $gate,
+# --- gate rule results (the gate's own defs, prelude.jq / apps.jq) for the rules this mechanism runs (gate.sh blocks;
+# test-report.sh checks each named rule is a row of the case's gate.txt with the same state)
+| (["no_5xx", "issuer_stable", "sub_stable", "app_login_ok", "introspection_ok", "jwt_ok", "app_refresh_ok",
+    "backchannel_delivered", "frontchannel_ok", "logout_effective"]
+   + (if $base == "shared" then ["inflight_login", "refresh_across_switch", "no_invalid_grant", "logout_probe_never_ok"]
+      else ["refresh_pre_copy", "logout_after_replay", "relogin_ok"] end)
+   + (if $mech == "shared-rollback" then ["inflight_login_rollback", "refresh_blue_after_rollback", "refresh_green_after_rollback"]
+      elif $mech == "lossy" then ["invalid_grant_in_window"]
+      elif $mech == "lossy-rollback" then ["invalid_grant_phases", "refresh_pre_copy_after_rollback", "logout_after_rollback_replay", "green_users_sub_kept"]
+      else [] end)) as $active
+| def rr($r): if $r == "no_5xx" then r_no_5xx elif $r == "issuer_stable" then r_issuer_stable elif $r == "sub_stable" then r_sub_stable
+    elif $r == "app_login_ok" then r_app_login elif $r == "introspection_ok" then r_introspection elif $r == "jwt_ok" then r_jwt
+    elif $r == "app_refresh_ok" then r_app_refresh elif $r == "backchannel_delivered" then r_backchannel
+    elif $r == "frontchannel_ok" then r_frontchannel elif $r == "logout_effective" then r_logout_effective
+    elif $r == "inflight_login" then r_inflight_login elif $r == "refresh_across_switch" then r_refresh_across_switch
+    elif $r == "no_invalid_grant" then r_no_invalid_grant elif $r == "logout_probe_never_ok" then r_logout_probe_never_ok
+    elif $r == "refresh_pre_copy" then r_refresh_pre_copy elif $r == "logout_after_replay" then r_logout_after_replay
+    elif $r == "relogin_ok" then r_relogin_ok elif $r == "inflight_login_rollback" then r_inflight_login_rollback
+    elif $r == "refresh_blue_after_rollback" then r_refresh_blue_after_rollback
+    elif $r == "refresh_green_after_rollback" then r_refresh_green_after_rollback
+    elif $r == "invalid_grant_in_window" then r_invalid_grant_in_window elif $r == "invalid_grant_phases" then r_invalid_grant_phases
+    elif $r == "refresh_pre_copy_after_rollback" then r_refresh_pre_copy_after_rollback
+    elif $r == "logout_after_rollback_replay" then r_logout_after_rollback_replay
+    elif $r == "green_users_sub_kept" then r_green_users_sub_kept else error("report.jq: no def for rule \($r)") end;
+  ($active | map({key: ., value: rr(.)}) | from_entries) as $GR
+# A mode's share of a gate rule: the rule's bad items of this mode's class (f). The mode is over bound when the rule
+# FAILs on items of its class, or (primary owner) the rule FAILs with no bad item at all (nothing to judge).
+| def share($r; f; $primary): $GR[$r] as $g | if $g == null then empty else ([($g.bad // [])[] | select(f)] | length) as $m
+    | {rule: $r, state: $g.r, mine: $m, fail: ($g.r == "FAIL" and ($m > 0 or ($primary and ($g.bad // []) == [])))} end;
+
+# --- failure modes: attempts (null = no source data), occ: [times], ur: unexpected that no gate rule judges (report
+# only), own: [share(...)] the gate rules enforcing the mode. unexpected = gated (the rules' bad items) + ur.
+  def mode($id; $att; $occ; $ur; $exp; $own):
+    ([$own[].mine] | add // 0) as $ug
+    | {id: $id, attempts: $att, count: ($occ | length), unexpected: ($ug + $ur), gated: $ug, expected: $exp,
+     rules: [$own[].rule], own: $own, gate: (if $own == [] then "report only" else [$own[].rule] | join(", ") end),
      rate: (if ($att // 0) > 0 then ($occ | length) / $att | r(100000) else null end),
      first: ($occ | min | rel), last: ($occ | max | rel),
      phases: {pre: ([$occ[] | select(phase(.) == "pre")] | length), cut: ([$occ[] | select(phase(.) == "cut")] | length),
               post: ([$occ[] | select(phase(.) == "post")] | length)},
-     verdict: (if ($att // 0) == 0 then "nodata" elif $unexp > 0 then (if $gate == "report only" then "warn" else "fail" end)
+     verdict: (if ($att // 0) == 0 then "nodata" elif any($own[]; .fail) then "fail" elif $ur > 0 then "warn"
                elif ($occ | length) > 0 then "expected" else "ok" end)};
   def lossy($shared; $lossy; $lrb): if $base == "shared" then $shared elif $mech == "lossy" then $lossy else $lrb end;
-  def gated($g): if $g == "" then "report only" else $g end;
+  def refreshrules: "refresh_across_switch", "refresh_blue_after_rollback", "refresh_green_after_rollback", "refresh_pre_copy",
+    "refresh_pre_copy_after_rollback";
 
   ([$L[] | select(.status >= 500)]) as $x5
 | ([$L[] | select(.status == 0)]) as $x0
-| ([$logins[] | select(.ok | not)]) as $lf
-| ([$logins[] | select(straddles($sw) or straddles($rb))]) as $infl
-| ([$L[] | select(.step == "refresh") | {ts, b: born, ok: (.status == 200), ig: (.error == "invalid_grant"), net: (.status == 0)}]
-   + [$A[] | select(.app == "testclient" and .event == "refresh") | {ts, b: $abirth[.sid // ""], ok: (.ok == true), ig: (.error == "invalid_grant"), net: false}]) as $rf
+| ([$logins[] | select(.app | not)]) as $dl
+| ([$dl[] | select(.ok | not)]) as $dlf
+| ([$dlf[] | select(($base == "lossy" and acrossflip([.first, .last])) | not)]) as $dlu
+| app_logins as $al
+| ([$L[] | select(.step == "refresh") | {ts, ok: (.status == 200), ig: (.error == "invalid_grant"), net: (.status == 0)}]
+   + [$A[] | select(.app == "testclient" and .event == "refresh") | {ts, ok: (.ok == true), ig: (.error == "invalid_grant"), net: false}]) as $rf
 | ([$rf[] | select(.ig)]) as $rlost
 | ([$L[] | select(.step == "logout_probe" or .step == "app_me_after_logout")]) as $probes
 | ([$L[] | select(.iss != null)]) as $isss
 | ([$L[] | select(.sub != null and .user != null)] | group_by(.user) | map(sort_by(.ts))) as $users
 | ([$users[] | .[0].sub as $s0 | [.[] | select(.sub != $s0)] | select(length > 0) | .[0].ts]) as $subch
 | ([$A[] | select(.app == "testresource" and .event == "introspection")]) as $intro
-| ([$A[] | select(.app == "testclient" and .event == "call" and .target == "introspect" and (.upstream_status == 200 or .upstream_status == 401) and alive)]) as $icalls
-| ([$A[] | select(.app == "testclient" and .event == "call" and .target == "jwt" and (.upstream_status == 200 or .upstream_status == 401) and alive)]) as $jcalls
-| def delivered($ev; cond): [$A[] | select(.app == "testclient" and .event == $ev and .sid != null) | select(cond)]
-    | group_by(.sid) | map({key: .[0].sid, value: (map(.ts) | min)}) | from_entries;
-  delivered("backchannel_logout"; .ok == true) as $bcat
-| delivered("frontchannel_logout"; .found_session == true) as $fcat
-| def rplogouts($p): [$A[] | select(.app == "testclient" and .event == "logout_initiated" and ((.registration // "") | startswith($p)) and .ts < $aend - 10)];
-  ([rplogouts("bc-")[] | . + {d: ($bcat[.sid // ""] as $b | if $b == null or $b - .ts > 10 then null else $b - .ts end)}]) as $bcl
-| ([rplogouts("fc-")[] | select(($fcat[.sid // ""] as $f | $f != null and $f - .ts <= 10) | not)]) as $fcbad
+| intro_sets as $isets | jwt_sets as $jsets | bc_judged as $bcj | fc_judged as $fcj
+| ((if $sw != null then inflight_sets($sw) else {x: [], b: []} end) as $f | (if $rb != null then inflight_sets($rb) else {x: [], b: []} end) as $r
+   | {x: ($f.x + $r.x), b: ($f.b + $r.b), bu: [$f.b[] | select($cp != null and .[0].ts < $cp)]}) as $infl
 
 # --- latency: per step class, the 3 windows (CDF bins: 10 per decade of ms) and 10 s buckets of p50/p95/p99
 | ([$L[] | {c: sclass, ts, ms: ((.te - .ts) * 1000)}]
@@ -132,8 +144,8 @@ def cls:
    + [$intro[] | select(.error != null or .http_status != 200) | {ts, c: "introspection_error"}]
    + [$A[] | select(.app == "testclient" and .event == "refresh" and .ok != true)
       | {ts, c: (if .error == "invalid_grant" then "refresh_lost_session" else "refresh_other_error" end)}]
-   + [$icalls[] | select(.upstream_status == 401 and .error == null) | {ts, c: "introspection_false_inactive"}]
-   + [$jcalls[] | select(.upstream_status == 401 and .error == null) | {ts, c: "jwt_rejected"}]
+   + [($isets.x + $isets.fi)[] | {ts, c: "introspection_false_inactive"}]
+   + [$jsets.b[] | {ts, c: "jwt_rejected"}]
    | map(. + {b: (((.ts - $T0) / $B) | floor)})) as $pts
 | ($pts | map(.b)) as $bs
 | (if $bs == [] then null else
@@ -192,43 +204,58 @@ def cls:
      else empty end)
   ] | map(.v |= tostring)),
   modes: [
-    mode("http_5xx"; ($L | length); [$x5[].ts]; ($x5 | length); "0"; "no_5xx"),
-    mode("net_error"; ($L | length); [$x0[].ts]; ($x0 | length); "0 (\($aborted | length) k6 self-aborts after load_stop excluded)"; "no_5xx"),
-    mode("login_failed"; ($logins | length); [$lf[].te];
-      ([$lf[] | select(($base == "lossy" and (straddles($sw) or straddles($rb))) | not)] | length);
-      lossy("0"; "only logins straddling the switch"; "only logins straddling the switch or the rollback"); "report only"),
-    mode("inflight_login_broken"; ($infl | length); [$infl[] | select(.ok | not) | .te];
-      ([$infl[] | select(.ok | not) | select($base == "shared" or (straddles($sw) and .first < $cp))] | length);
+    mode("http_5xx"; ($L | length); [$x5[].ts]; 0; "0"; [share("no_5xx"; .status >= 500; false)]),
+    mode("net_error"; ($L | length); [$x0[].ts]; 0; "0 (\($aborted | length) k6 self-aborts after load_stop excluded)";
+      [share("no_5xx"; .status == 0; false), share(refreshrules; .status == 0; false)]),
+    # direct logins: report only (no gate rule in lossy; shared: their in-flight part is inflight_login_broken)
+    (mode("login_failed"; ($dl | length) + ($al | length); [$dlf[].te] + [$al[] | select(.fail) | .me[0].ts]; ($dlu | length);
+      lossy("0"; "only logins with a hop before the flip and one at/after it; flip = [switch, flipped + \($grace) s] (the switch event alone without a flipped event)";
+        "only logins with a hop before a flip and one at/after it; flips = [switch, flipped + \($grace) s], [rollback, flipped + \($grace) s]")
+      + "; app logins: gated (app_login_ok), direct logins: report only";
+      [share("app_login_ok"; true; false)])
+     | .note = (if $dlu == [] then "" else "unexpected direct logins (end of last hop, s): " + ([$dlu[].te | rel | tostring] | .[:20] | join(", ")) end)),
+    mode("inflight_login_broken"; ($infl.x | length); [$infl.b[] | .[-1].te]; (if $base == "lossy" then $infl.bu | length else 0 end);
       lossy("0"; "only logins started after copy_point"; "only logins started after copy_point, or straddling the rollback");
-      lossy(if $mech == "shared" then "inflight_login" else "inflight_login, inflight_login_rollback" end; "report only"; "report only")),
-    mode("refresh_lost_session"; ($rf | length); [$rlost[].ts]; ([$rlost[] | select(lost_ok(.ts; .b) | not)] | length);
+      [share("inflight_login"; true; true), share("inflight_login_rollback"; true; true)]),
+    mode("refresh_lost_session"; ($rf | length); [$rlost[].ts]; 0;
       lossy("0"; "only sessions born in [copy_point, switch]";
-        "born in [copy_point, switch] and lost before rollback+1 s, or born in (switch, rollback) and lost after rollback");
-      lossy("no_invalid_grant"; "invalid_grant_in_window, relogin_ok"; "invalid_grant_phases, relogin_ok")),
-    ([$rf[] | select((.ok or .ig or .net) | not)]) as $ro
-    | mode("refresh_other_error"; ($rf | length); [$ro[].ts]; ($ro | length); "0";
-      lossy("refresh_across_switch (sessions born before switch)"; "refresh_pre_copy (sessions born before copy_point)"; "refresh_pre_copy, refresh_pre_copy_after_rollback")),
-    ([$intro[] | select(.error != null or .http_status != 200)]) as $ie
-    | mode("introspection_error"; ($intro | length); [$ie[].ts]; ($ie | length); "0"; "report only"),
-    ([$icalls[] | select(.upstream_status == 401 and .error == null)]) as $fi
-    | mode("introspection_false_inactive"; ($icalls | length); [$fi[].ts]; ([$fi[] | select(lost_ok(.ts; $abirth[.sid // ""]) | not)] | length);
-      lossy("0"; "only sessions born in [copy_point, switch]"; "only sessions the lossy rules lose"); "report only"),
-    ([$jcalls[] | select(.upstream_status == 401 and .error == null)]) as $jr
-    | mode("jwt_rejected"; ($jcalls | length); [$jr[].ts]; ($jr | length); "0 (realm keys live in the DB, copied with it)"; "report only"),
+        "born in [copy_point, switch] and lost before rollback+\($grace) s, or born in (switch, rollback) and lost after rollback");
+      [share("no_invalid_grant"; true; true), share("invalid_grant_in_window"; true; false), share("invalid_grant_phases"; true; false),
+       share("relogin_ok"; true; false), share(refreshrules; ig; false), share("app_refresh_ok"; ig; false)]),
+    ([$GR[(refreshrules)] | values | .bad[]? | "\(.login_id)@\(.t_start)"]) as $rgated
+    | ([$L[] | select(.step == "refresh" and .status != 200 and .status != 0 and (ig | not)) | "\(.login_id)@\(.t_start)" as $k
+        | select(any($rgated[]; . == $k) | not)]) as $rur
+    | mode("refresh_other_error"; ($rf | length); [$rf[] | select((.ok or .ig or .net) | not) | .ts]; ($rur | length);
+      "0; gated for k6 sessions born before the switch (lossy: copy_point) and app refreshes, report only for the rest";
+      [share(refreshrules; (ig | not) and .status != 0; true), share("app_refresh_ok"; ig | not; false)]),
+    mode("introspection_error"; ($isets.ie | length) + ($isets.c | length); [$isets.e[].ts]; 0; "0";
+      [share("introspection_ok"; (.step == "app_call_introspect" and .upstream_status == 401) | not; false)]),
+    mode("introspection_false_inactive"; ([$isets.c[] | select(.upstream_status == 200 or .upstream_status == 401)] | length);
+      [($isets.x + $isets.fi)[].ts]; 0; lossy("0"; "only sessions born in [copy_point, switch]"; "only sessions the lossy rules lose (lossok)");
+      [share("introspection_ok"; .step == "app_call_introspect" and .upstream_status == 401; false)]),
+    mode("jwt_rejected"; ($jsets.a | length); [$jsets.b[].ts]; 0; "0 (realm keys live in the DB, copied with it)"; [share("jwt_ok"; true; false)]),
     ([$isss[] | select(.iss != "https://kc-\(.net).localtest.me/keycloak/realms/demo")]) as $im
-    | mode("issuer_mismatch"; ($isss | length); [$im[].ts]; ($im | length); "0"; "issuer_stable"),
-    mode("sub_changed"; ($users | length); $subch; ($subch | length); "0"; if $mech == "lossy-rollback" then "sub_stable, green_users_sub_kept" else "sub_stable" end),
-    ([$probes[] | select(.status == 200)]) as $pr
-    | mode("logout_not_effective"; ($probes | length); [$pr[].ts]; ([$pr[] | select(probe_ok(.ts) | not)] | length);
-      lossy("0"; "only in [switch, replay_done+1 s) (resurrection window)"; "only in [switch, replay_done+1 s) or [rollback, rollback_replay_done+1 s)");
-      lossy("logout_probe_never_ok"; "logout_after_replay (probes after replay_done only)"; "logout_after_replay, logout_after_rollback_replay")),
-    ([$bcl[] | select(.d == null)]) as $bm
-    | mode("backchannel_missing"; ($bcl | length); [$bm[].ts]; ($bm | length); "0 (within 10 s)"; "report only"),
-    ([$bcl[] | select(.d != null and .d > 2)]) as $bl
-    | mode("backchannel_late"; ([$bcl[] | select(.d != null)] | length); [$bl[].ts]; ($bl | length); "0 (> 2 s after the logout)"; "report only"),
-    mode("frontchannel_failed"; (rplogouts("fc-") | length); [$fcbad[].ts]; ($fcbad | length); "0"; "report only"),
+    | mode("issuer_mismatch"; ($isss | length); [$im[].ts]; 0; "0"; [share("issuer_stable"; true; true)]),
+    mode("sub_changed"; ($users | length); $subch; 0; "0"; [share("sub_stable"; true; false), share("green_users_sub_kept"; true; false)]),
+    mode("logout_not_effective"; ($probes | length);
+      [$probes[] | select(if .step == "logout_probe" then .status == 200 else .status != 401 end) | .ts];
+      ([$probes[] | select(.step == "logout_probe" and .status == 200 and $base == "lossy" and ($sw == null or .ts < $sw))] | length);
+      lossy("0";
+        "probes: only in [switch, replay_done+\($grace) s) (resurrection window); app /me: only Keycloak-initiated logouts of sessions lost in the window (Keycloak did not know them)";
+        "probes: only in [switch, replay_done+\($grace) s) or [rollback, rollback_replay_done+\($grace) s); app /me: only Keycloak-initiated logouts of sessions the lossy rules lose");
+      [share("logout_probe_never_ok"; true; true), share("logout_after_replay"; true; true), share("logout_after_rollback_replay"; true; true),
+       share("logout_effective"; true; false)]),
+    mode("backchannel_missing"; ($bcj | length); [$bcj[] | select(.why != null or .exc) | .lo]; 0;
+      "0: ok delivery within 10 s, Keycloak-initiated also /me 401 after it" + lossy(""; "; undelivered only for sessions lost in the window (lossok)"; "; undelivered only for sessions the lossy rules lose (lossok)");
+      [share("backchannel_delivered"; true; false)]),
+    ([$bcj[] | select(.d != null and .d <= 10)]) as $bd
+    | mode("backchannel_late"; ($bd | length); [$bd[] | select(.d > 2) | .lo]; ([$bd[] | select(.d > 2)] | length); "0 (> 2 s after the logout)"; []),
+    mode("frontchannel_failed"; ($fcj | length); [$fcj[] | select(.why != null or .exc) | .lo]; 0;
+      "0: iframe on the logout page, fetched 200, frontchannel_logout at the app, /me 401; Keycloak-initiated also found_session true"
+      + lossy(""; "; undelivered only for sessions lost in the window (lossok)"; "; undelivered only for sessions the lossy rules lose (lossok)");
+      [share("frontchannel_ok"; true; false)]),
     (mode("latency_regression"; ($lr | length); [$lr[] | select(.ratio > 2) | $W[0][0]]; ([$lr[] | select(.ratio > 2)] | length);
-      "0 step classes with cutover p95 > 2x pre-switch p95"; "report only")
+      "0 step classes with cutover p95 > 2x pre-switch p95"; [])
      | .first = null | .last = null | .note = ([$lr[] | "\(.c) \(.ratio)x"] | join(", ")))
   ]
 }

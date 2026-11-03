@@ -42,6 +42,9 @@ export default function () {
     [oauthError({ status: 502, headers: { 'Content-Type': 'text/html' } }), null],
     // app scenario
     [[0, 1, 2, 3, 4, 7].map((i) => appPick(i).reg).join(), 'bc-net1,bc-net2,fc-net1,fc-net2,bc-net1,fc-net2'],
+    [[0, 3, 4, 7, 8, 12].map((i) => appPick(i).initiator).join(), 'app,app,kc,kc,app,kc'],
+    // one VU's 8 consecutive iterations cover every registration x initiator once
+    [new Set([5, 6, 7, 8, 9, 10, 11, 12].map((i) => `${appPick(i).reg}/${appPick(i).initiator}`)).size, 8],
     [appStepOf('GET', 'https://app.localtest.me/login/bc-net1'), 'app_login_start'],
     [appStepOf('GET', 'https://app.localtest.me/oauth2/authorization/bc-net1'), 'app_login_authorization'],
     [appStepOf('GET', 'https://app.localtest.me/login/oauth2/code/fc-net2?code=c&state=s'), 'app_login_callback'],
