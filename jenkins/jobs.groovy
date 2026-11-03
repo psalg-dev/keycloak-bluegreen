@@ -1,7 +1,7 @@
 pipelineJob('kc-bluegreen') {
   description('Blue-green Keycloak upgrade demo: one case per build. Runs scripts/demo.sh.')
   parameters {
-    choiceParam('CASE', ['patch', 'minor', 'major', 'patch-rollback', 'minor-rollback'], 'Upgrade case (FROM/TO versions come from cases.env); *-rollback = switch, soak, roll back')
+    choiceParam('CASE', ['patch', 'minor', 'major', 'patch-rollback', 'minor-rollback', 'all'], 'Upgrade case (FROM/TO versions come from cases.env); *-rollback = switch, soak, roll back; all = every case in cases.env in turn (needs the Jenkinsfile change in docs/failure-modes.md before it runs correctly)')
     booleanParam('RUN_MAINTENANCE', false, 'Also run the config-cli maintenance stage (breaking changes, behind a freeze). Exported as true|false.')
   }
   definition {
