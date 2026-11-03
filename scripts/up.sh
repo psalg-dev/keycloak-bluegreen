@@ -47,8 +47,8 @@ kubectl apply --server-side -f "https://github.com/cloudnative-pg/cloudnative-pg
 kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=300s >/dev/null
 log "cnpg ready"
 
-for ns in "$NS" legacy; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done
-scripts/certs.sh "$NS" legacy
+for ns in "$NS" legacy apps; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done
+scripts/certs.sh "$NS" legacy apps
 ensure_secret kc-bootstrap-admin password
 kubectl -n "$NS" get cluster.postgresql.cnpg.io pg-1 >/dev/null 2>&1 || create_db pg-1
 
@@ -67,6 +67,33 @@ kind load docker-image --name "$CLUSTER" "$LEGACY_IMAGE" >/dev/null 2>&1 || die 
 LEGACY_IMAGE=docker.io/$LEGACY_IMAGE envsubst < k8s/legacy/legacy-idp.yaml.tpl | kubectl apply -f - >/dev/null
 kubectl -n legacy rollout status deploy/legacy-idp --timeout=300s >/dev/null
 log "legacy-idp ready: https://legacy-net1.localtest.me, https://legacy-net2.localtest.me"
+
+# Test apps (docs/test-apps.md): OIDC client + resource server in ns apps, GraalVM native images. Their Keycloak client
+# secrets: Secret test-apps, generated once, in ns apps (the apps) AND $NS (config-cli: config/online/70-test-apps.json).
+# Before first_install: its online config stage needs the $NS copy.
+if ! kubectl -n apps get secret test-apps >/dev/null 2>&1; then
+  kubectl -n apps create secret generic test-apps --from-literal=testclient-bc="$(openssl rand -hex 24)" \
+    --from-literal=testclient-fc="$(openssl rand -hex 24)" --from-literal=testresource="$(openssl rand -hex 24)" >/dev/null
+fi
+kubectl -n apps get secret test-apps -o json \
+  | jq --arg ns "$NS" '{apiVersion, kind, type, data, metadata: {name: .metadata.name, namespace: $ns}}' \
+  | kubectl apply -f - >/dev/null
+# app_image <app> <var>: build (tests inside; native image = minutes), content tag, kind load; image ref -> <var>
+app_image() {
+  local id img
+  id=$(docker build -q -f "images/$1/Dockerfile" "$1") || die "build $1"
+  img=kc-bluegreen/$1:${id:7:12} # content tag: a code change rolls the Deployment
+  docker tag "$id" "$img"
+  kind load docker-image --name "$CLUSTER" "$img" >/dev/null 2>&1 || die "kind load $img"
+  printf -v "$2" '%s' "docker.io/$img"
+}
+log "building test apps (native images, tests run inside the build: takes minutes)"
+app_image testclient TESTCLIENT_IMAGE
+app_image testresource TESTRESOURCE_IMAGE
+export TESTCLIENT_IMAGE TESTRESOURCE_IMAGE
+envsubst < k8s/apps/test-apps.yaml.tpl | kubectl apply -f - >/dev/null
+for app in testclient testresource; do kubectl -n apps rollout status "deploy/$app" --timeout=300s >/dev/null; done
+log "test apps ready: https://app.localtest.me, https://api.localtest.me"
 
 kubectl apply -f k8s/edge/ >/dev/null
 if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then

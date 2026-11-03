@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  # Behind ingress-nginx (TLS terminated there): redirect_uri and Secure cookies follow X-Forwarded-Proto/-Host, but
+  # only from the pod subnet (same reasoning as legacy-idp/application.yaml). Keycloak's direct back-channel POSTs carry
+  # no X-Forwarded-* and stay http://testclient.apps.svc:8080.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      internal-proxies: 10.244.0.0/16
+      protocol-header: X-Forwarded-Proto
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        demo-ca: # Secret demo-ca mounted at /etc/demo-ca; trust for kc-netN.localtest.me and api.localtest.me
+          truststore:
+            certificate: file:/etc/demo-ca/ca.crt
+
+demo:
+  issuer: https://kc-{net}.localtest.me/keycloak/realms/demo
+  api: https://api.localtest.me
+  app-url: https://app.localtest.me

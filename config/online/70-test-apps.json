@@ -1,0 +1,95 @@
+{
+  "realm": "demo",
+  "clients": [
+    {
+      "clientId": "testclient-bc",
+      "description": "Test client app (ns apps), registrations bc-net1/bc-net2 (docs/test-apps-contract.md)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "$(env:TESTCLIENT_BC_SECRET)",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://app.localtest.me/login/oauth2/code/bc-net1",
+        "https://app.localtest.me/login/oauth2/code/bc-net2"
+      ],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "basic"
+      ],
+      "optionalClientScopes": [
+        "tenant"
+      ],
+      "protocolMappers": [
+        {
+          "name": "login_ctx",
+          "protocol": "openid-connect",
+          "protocolMapper": "demo-login-context-mapper",
+          "config": {}
+        }
+      ],
+      "frontchannelLogout": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://app.localtest.me/",
+        "backchannel.logout.url": "http://testclient.apps.svc:8080/logout/connect/back-channel/bc",
+        "backchannel.logout.session.required": "true",
+        "access.token.lifespan": "60"
+      }
+    },
+    {
+      "clientId": "testclient-fc",
+      "description": "Test client app (ns apps), registrations fc-net1/fc-net2 (docs/test-apps-contract.md)",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "$(env:TESTCLIENT_FC_SECRET)",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://app.localtest.me/login/oauth2/code/fc-net1",
+        "https://app.localtest.me/login/oauth2/code/fc-net2"
+      ],
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "basic"
+      ],
+      "optionalClientScopes": [
+        "tenant"
+      ],
+      "protocolMappers": [
+        {
+          "name": "login_ctx",
+          "protocol": "openid-connect",
+          "protocolMapper": "demo-login-context-mapper",
+          "config": {}
+        }
+      ],
+      "frontchannelLogout": true,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://app.localtest.me/",
+        "frontchannel.logout.url": "https://app.localtest.me/frontchannel-logout",
+        "frontchannel.logout.session.required": "true",
+        "access.token.lifespan": "60"
+      }
+    },
+    {
+      "clientId": "testresource",
+      "description": "Test resource server (ns apps): token introspection caller only",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "$(env:TESTRESOURCE_SECRET)",
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "frontchannelLogout": false
+    }
+  ]
+}
