@@ -12,7 +12,7 @@
 //   user, net       userNNNN (null on reads), net1|net2
 //   sub, iss        from the access token on token lines (iss also = discovery `issuer`), else null
 //   claims          {login_ctx, tenant} from the access token, else nulls
-// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), DURATION (10m).
+// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), DURATION (60m, a cap: load.sh stop ends the run).
 import http from 'k6/http';
 import { sleep } from 'k6';
 import exec from 'k6/execution';
@@ -22,7 +22,7 @@ import encoding from 'k6/encoding';
 const SECRET = __ENV.K6_APP_SECRET;
 const PASSWORD = __ENV.LEGACY_USER_PASSWORD;
 const LOGIN_RATE = Number(__ENV.LOGIN_RATE || 5);
-const DURATION = __ENV.DURATION || '10m';
+const DURATION = __ENV.DURATION || '60m';
 const REDIRECT = 'https://app.localtest.me/cb';
 const PROBE_EVERY = 5; // s, refresh + logout_probe period
 const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU every ~45 s (login + think + 30 s)

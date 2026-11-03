@@ -173,6 +173,18 @@ freeze() {
   kubectl -n "$NS" rollout status deploy/kc-maint --timeout=120s >/dev/null
   # shellcheck disable=SC2016 # envsubst's variable list, not an expansion
   PATHS=$paths envsubst '$PATHS' < k8s/edge/kc-freeze.yaml.tpl | kubectl apply -f - >/dev/null
+  # Applied is not routed: wait until the ingress answers 503 on both hosts, then let requests blue already admitted
+  # finish, so no admin/account write commits after the copy point that follows.
+  [[ -n ${CA_FILE:-} ]] || ca_file >/dev/null
+  local ip h code; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
+  for h in kc-net1 kc-net2; do
+    for _ in $(seq 60); do
+      code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA_FILE" --resolve "$h.localtest.me:443:$ip"         "https://$h.localtest.me$1/") || true
+      [[ $code == 503 ]] && break; sleep 1
+    done
+    [[ $code == 503 ]] || die "freeze: $h.localtest.me$1 still answers ${code:-nothing}, not 503"
+  done
+  sleep "${FREEZE_SETTLE_SECONDS:-2}" # ponytail: admitted admin calls take ms; a fixed settle, not request tracking
   log "frozen: $*"
 }
 unfreeze() { kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null; log "unfrozen"; }
@@ -220,8 +232,9 @@ k6_status() {
   local p; p=$(kubectl -n load get pod -l job-name=k6 -o name 2>/dev/null | head -1)
   [[ -n $p ]] || { echo "k6 not running"; return; }
   kubectl -n load exec "$p" -- cat /out/k6.log 2>/dev/null \
-    | jq -rRs '[split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
-      | "k6: \(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant" and .step == "refresh")) | length) refresh invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins, \(map(select(.step == "logout_probe" and .status == 200)) | length) logged-out refreshes"'
+    | jq -rRs '(split("\n") | map(select(startswith("k6 exited"))) | first // null) as $end
+      | [split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
+      | (if $end then "K6 ENDED (\($end)): NO LOAD NOW | " else "" end) + "k6:\(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant" and .step == "refresh")) | length) refresh invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins, \(map(select(.step == "logout_probe" and .status == 200)) | length) logged-out refreshes"'
 }
 
 # wait_progress <seconds> <label>: sleep, but log k6_status every 30 s. Silent sleeps make a live run look dead.
@@ -238,5 +251,5 @@ wait_progress() {
 progress_ticker() {
   local TAG="load test" s=0
   trap - ERR
-  while sleep 30; do s=$((s + 30)); log "$1 +${s}s, load still running | $(k6_status)"; done
+  while sleep 30; do s=$((s + 30)); log "$1 +${s}s | $(k6_status)"; done
 }

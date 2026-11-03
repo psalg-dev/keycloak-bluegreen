@@ -95,6 +95,8 @@ class ReplayEventListenerTest {
         UserModel user = mock(UserModel.class);
         when(user.getUsername()).thenReturn("user4500");
         when(user.getEmail()).thenReturn("user4500@legacy.example");
+        when(user.getFirstName()).thenReturn("User");
+        when(user.getLastName()).thenReturn("4500");
         when(user.getAttributes()).thenReturn(Map.of("tenant", List.of("t0"), "username", List.of("user4500")));
         UserProvider users = mock(UserProvider.class);
         when(session.users()).thenReturn(users);
@@ -116,6 +118,8 @@ class ReplayEventListenerTest {
         assertNull(j.get("sessionId"));
         assertEquals("user4500", j.get("username"));
         assertEquals("user4500@legacy.example", j.get("email"));
+        assertEquals("User", j.get("firstName"), "replayed users keep their names (dropped before)");
+        assertEquals("4500", j.get("lastName"));
         assertEquals(Map.of("tenant", List.of("t0")), j.get("attributes"), "root attrs (username, ...) stripped");
         assertEquals(List.of(Map.of("identityProvider", "legacy-net1", "userId", "user4500", "userName", "user4500")),
                 j.get("federatedIdentities"));

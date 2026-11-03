@@ -3,7 +3,7 @@
 #   start    copies the Secrets it needs into `load`, (re)creates ConfigMap k6-flows and Job k6
 #   collect  writes k6's JSON lines (schema: top of flows.js) to out/k6.jsonl; works while k6 runs
 #   stop     stops k6 gracefully (SIGINT), collects, deletes the Job
-# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) DURATION (10m)
+# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) DURATION (60m: a cap only, cool-down stops k6; 10m ran out mid-switch in build #11)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -34,14 +34,16 @@ start)
   for s in "${!SRC[@]}"; do copy_secret "$s" "${SRC[$s]}"; done
   kubectl -n "$LNS" create configmap k6-flows --from-file=flows.js=load/k6/flows.js --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" delete job k6 --ignore-not-found --wait >/dev/null
-  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} DURATION=${DURATION:-10m} \
+  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} DURATION=${DURATION:-60m} \
     envsubst < k8s/k6-job.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" wait pod -l job-name=k6 --for=condition=Ready --timeout=120s >/dev/null || die "k6 pod not Ready"
-  log "k6 started (rate ${LOGIN_RATE:-5}/s, ${DURATION:-10m})"
+  log "k6 started (rate ${LOGIN_RATE:-5}/s, ${DURATION:-60m})"
   ;;
 collect) collect ;;
 stop)
   p=$(pod); [[ -n $p ]] || die "no k6 pod in ns $LNS"
+  # k6 must still be running: if it ended on its own, part of the run (maybe the cutover) had no load at all
+  ended=$(kubectl -n "$LNS" exec "$p" -- grep '^k6 exited' /out/k6.log 2>/dev/null || true)
   event load_stop # the gate ignores status-0 lines after this: requests k6 itself aborts on SIGINT
   kubectl -n "$LNS" exec "$p" -- pkill -INT k6 2>/dev/null || true # already finished is fine
   for _ in $(seq 60); do
@@ -50,6 +52,7 @@ stop)
   done
   collect
   kubectl -n "$LNS" delete job k6 --wait >/dev/null
+  [[ -z $ended ]] || die "k6 had ended on its own before the stop ($ended): DURATION too short, the run was not under load to the end"
   log "k6 stopped"
   ;;
 *) die "usage: load.sh start|stop|collect" ;;

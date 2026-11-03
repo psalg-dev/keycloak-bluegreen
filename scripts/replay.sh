@@ -38,10 +38,12 @@ while read -r l; do
   [[ $(jq -r .realmId <<<"$l") == "$realm_id" ]] || continue
   case $(jq -r .type <<<"$l") in
     LOGOUT)
-      apply logout DELETE "/realms/demo/sessions/$(jq -r .sessionId <<<"$l")"
+      sid=$(jq -r '.sessionId // empty' <<<"$l")
+      [[ -n $sid ]] || die "replay: LOGOUT without sessionId (user $(jq -r .userId <<<"$l")): would 404 and be counted as done"
+      apply logout DELETE "/realms/demo/sessions/$sid"
       logouts=$((logouts + 1)) ;;
     REGISTER)
-      jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, enabled: true, emailVerified: true,
+      jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled: true, emailVerified: true,
            attributes, federatedIdentities}]}' <<<"$l" \
         | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$l")"
       # SKIP also skips silently when <to> already has that username under ANOTHER id (the person logged in on <to>

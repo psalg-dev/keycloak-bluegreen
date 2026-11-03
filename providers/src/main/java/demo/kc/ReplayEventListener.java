@@ -64,6 +64,8 @@ public class ReplayEventListener implements EventListenerProvider {
         attributes.keySet().removeAll(ROOT_ATTRIBUTES);
         line.put("username", user.getUsername());
         line.put("email", user.getEmail());
+        line.put("firstName", user.getFirstName());
+        line.put("lastName", user.getLastName());
         line.put("attributes", attributes);
         line.put("federatedIdentities", session.users().getFederatedIdentitiesStream(realm, user)
                 .map(f -> {
