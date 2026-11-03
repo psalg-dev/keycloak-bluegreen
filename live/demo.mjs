@@ -110,7 +110,14 @@ async function cycle() {
   const c = { at: new Date().toISOString(), steps: {} };
   const net = c.net = Math.random() < 0.5 ? 'net1' : 'net2';
   try {
-    const { jar, tok } = await step('login', () => login(net), c.steps);
+    const { jar, tok } = await step('login', async () => {
+      try { return await login(net); } catch (e) {
+        // one retry keeps a live audience from seeing a red flash on a single slow hop; a real failure still counts
+        c.retried = String(e.message || e);
+        await new Promise((r) => setTimeout(r, 800));
+        return login(net);
+      }
+    }, c.steps);
     c.sub = (() => { try { return JSON.parse(Buffer.from(tok.id_token.split('.')[1], 'base64url')).sub; } catch { return null; } })();
     c.iss = (() => { try { return JSON.parse(Buffer.from(tok.id_token.split('.')[1], 'base64url')).iss; } catch { return null; } })();
 
