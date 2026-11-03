@@ -32,13 +32,14 @@ def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
 # (kc.sh wait_routed); + grace for requests nginx had already sent. No `flipped` (older runs, fixtures): the event alone.
 def flipwin($t): if $t == null then empty
   else [$t, ([$e[] | select(.event == "flipped") | .t | ts | select(. >= $t)] | min | if . == null then $t else . + $grace end)] end;
-# Lossy windows end when traffic really moved, not at the switch event: laptop build #24 had a session born on blue
+# Lossy-rollback: window sessions are lost on green AND, after the rollback, on blue too (rollback.sh purges blue's
+# sessions born after the copy point: purge-sessions.sh). Lossy windows end when traffic really moved, not at the switch event: laptop build #24 had a session born on blue
 # 2.8 s after `switch` (nginx still routed there), lost on green, and not excused while the window ended at `switch`.
 ([flipwin($sw)] | .[0][1] // $sw) as $swe | ([flipwin($rb)] | .[0][1] // $rb) as $rbe
 | def lossok($t; $at): $t != null and $cp != null and $sw != null and
   if $mode == "lossy" then $t >= $cp and $t <= $swe
   elif $mode == "lossy-rollback" then $rb != null
-    and (($t >= $cp and $t <= $swe and $at >= $sw and $at < $rbe + $grace) or ($t > $sw and $t < $rbe and $at >= $rb))
+    and (($t >= $cp and $t <= $swe and $at >= $sw) or ($t > $sw and $t < $rbe and $at >= $rb))
   else false end;
 def bornin($lo; $hi): born as $t | $t != null and $t >= $lo and $t < $hi;
 # direct logins (hop lines, sorted) with a hop before $t and the next at/after it: {x: all, b: failed ones}

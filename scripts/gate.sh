@@ -186,7 +186,9 @@ rule logout_after_rollback_replay r_logout_after_rollback_replay
 # Users first seen on green whose creation the reverse replay must have kept (same id = same sub) on blue.
 rule green_users_sub_kept r_green_users_sub_kept
 rule green_sessions_lost 'info(if $sw and $rb then [$L[] | select(.step == "refresh" and ig and ((born // -1) as $t | $t > $sw and $t < $rb)) | .login_id] | unique | n else "n/a" end)'
-rule window_sessions_back 'info(if $cp and $sw and $rb then [$L[] | select(.step == "refresh" and .status == 200 and .ts >= $rb and ((born // -1) as $t | $t >= $cp and $t <= $sw)) | .login_id] | unique | n else "n/a" end)'
+rule window_sessions_back 'if $cp == null or $sw == null or $rb == null then skip("needs copy_point + switch + rollback") else
+  [$L[] | select(.step == "refresh" and .status == 200 and .ts >= $rbe + $grace and ((born // -1) as $t | $t >= $cp and $t <= $swe))] as $b
+  | verdict($b == []; "\($b | map(.login_id) | unique | n) forward-window sessions refreshed OK after the rollback (rollback.sh purges them on blue)") + {bad: $b} end'
 rule relogins_after_rollback 'info([$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200 and .ts >= ($rb // 1e18))] | n)'
 rule reverse_logouts_replayed 'info([$e[] | select(.event == "replay" and $new != null and .from == $new) | .logouts // empty | tonumber] | max // "n/a")'
 rule reverse_users_replayed 'info([$e[] | select(.event == "replay" and $new != null and .from == $new) | .users // empty | tonumber] | max // "n/a")'

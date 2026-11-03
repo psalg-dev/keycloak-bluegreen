@@ -29,6 +29,10 @@ else
   freeze
   event rollback_window_start
   scripts/replay.sh "$cur" "$old" "$since"
+  # the old color's own sessions from after the copy point: lost on the new color already, and any logout made there
+  # can't reach them (purge-sessions.sh says why); they go before the old color takes traffic again
+  cp=$(jq -r 'select(.event == "copy_point") | .t' out/events.jsonl | tail -1)
+  scripts/purge-sessions.sh "$old" "${cp:?no copy_point event, cannot purge the window sessions of the old color}"
   event rollback from="$cur" to="$old"
   set_active "$old" "$olddb" "$oldv"
   event flipped to="$old"
