@@ -144,6 +144,7 @@ set_active() {
   kubectl -n "$NS" patch svc kc-active --type merge \
     -p "{\"spec\":{\"selector\":{\"app.kubernetes.io/instance\":\"kc-$1\"}}}" >/dev/null
   frozen || gate_select "$(kc_selector "$1")" # a freeze keeps admin/account on kc-maint until unfreeze
+  wait_routed "$1"
   kubectl -n "$NS" create configmap kc-state --from-literal=activeColor="$1" --from-literal=activeDb="$2" \
     --from-literal=version="$3" --from-literal=previousColor="$pc" --from-literal=previousDb="$pd" \
     --from-literal=previousVersion="$pv" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -151,6 +152,22 @@ set_active() {
 }
 
 state() { kubectl -n "$NS" get configmap kc-state -o "jsonpath={.data.$1}"; }
+
+# wait_routed <color>: until ingress-nginx's OWN upstream list for kc-active (its /dbg view of the Lua balancer) holds
+# exactly that color's ready pods. Patching the Service is not routing: laptop build #24 saw blue serve a new login
+# 2.8 s after the patch, so the `flipped` event written after set_active must mean "traffic moved".
+wait_routed() {
+  local p want got; p=$(kubectl -n ingress-nginx get pods -l app.kubernetes.io/component=controller -o name | head -1)
+  want=$(kubectl -n "$NS" get pods -l "app.kubernetes.io/instance=kc-$1" -o json | jq -r '[.items[]
+    | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .status.podIP] | sort | join(" ")')
+  for _ in $(seq 120); do
+    got=$(kubectl -n ingress-nginx exec "$p" -- /dbg backends get keycloak-kc-active-http 2>/dev/null \
+      | jq -r '[.endpoints[]?.address] | sort | join(" ")') || got=
+    [[ -n $want && $got == "$want" ]] && return 0
+    sleep 0.5
+  done
+  die "ingress-nginx routes kc-active to '${got:-nothing}', want kc-$1's ready pods ($want)"
+}
 
 # save_logs <color>: that color's Keycloak logs (every pod) to out/kc-<color>.log, before a scale-down deletes them:
 # the only evidence behind a 5xx the gate counts (build #11: three 500s on blue, unexplained once blue was gone).

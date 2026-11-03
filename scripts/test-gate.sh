@@ -62,6 +62,8 @@ app-kc-me-200      |shared|shared-base shared-inflight-ok app-shared app-shared-
 app-lossy-kc       |lossy |lossy-base app-lossy app-lossy-bc app-lossy-kc        |lossy |0|app_login_ok=PASS backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS
 app-flip-no-event  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy |1|app_login_ok=FAIL
 app-flip-flipped   |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy-flipped|0|app_login_ok=PASS
+born-in-flip-nofl  |lossy |lossy-base lossy-born-in-flip                   |lossy |1|invalid_grant_in_window=FAIL
+born-in-flip       |lossy |lossy-base lossy-born-in-flip                   |lossy-flipped|0|invalid_grant_in_window=PASS relogin_ok=PASS
 app-lossy-pass     |lossy |lossy-base app-lossy app-lossy-bc                   |lossy |0|app_login_ok=PASS introspection_ok=PASS jwt_ok=PASS app_refresh_ok=PASS backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS
 app-lossy-precopy  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-precopy-inactive |lossy |1|introspection_ok=FAIL
 app-lossy-bc-miss  |lossy |lossy-base app-lossy                                |lossy |1|backchannel_delivered=FAIL

@@ -24,10 +24,18 @@ def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
 | ([$e[] | select(.event == "switch") | .to] | .[0]) as $new
 | ([$L[] | select(.step == "login_token" and .status == 200) | {key: .login_id, value: .te}] | from_entries) as $born
 | def born: $born[.login_id // ""];
-def lossok($t; $at): $t != null and $cp != null and $sw != null and
-  if $mode == "lossy" then $t >= $cp and $t <= $sw
+# A flip's moment is known only as [switch, flipped] (rollback: [rollback, flipped]): the event is written before
+# set_active patches the Service, `flipped` once ingress-nginx's own upstream list holds only the new color
+# (kc.sh wait_routed); + grace for requests nginx had already sent. No `flipped` (older runs, fixtures): the event alone.
+def flipwin($t): if $t == null then empty
+  else [$t, ([$e[] | select(.event == "flipped") | .t | ts | select(. >= $t)] | min | if . == null then $t else . + $grace end)] end;
+# Lossy windows end when traffic really moved, not at the switch event: laptop build #24 had a session born on blue
+# 2.8 s after `switch` (nginx still routed there), lost on green, and not excused while the window ended at `switch`.
+([flipwin($sw)] | .[0][1] // $sw) as $swe | ([flipwin($rb)] | .[0][1] // $rb) as $rbe
+| def lossok($t; $at): $t != null and $cp != null and $sw != null and
+  if $mode == "lossy" then $t >= $cp and $t <= $swe
   elif $mode == "lossy-rollback" then $rb != null
-    and (($t >= $cp and $t <= $sw and $at >= $sw and $at < $rb + $grace) or ($t > $sw and $t < $rb and $at >= $rb))
+    and (($t >= $cp and $t <= $swe and $at >= $sw and $at < $rbe + $grace) or ($t > $sw and $t < $rbe and $at >= $rb))
   else false end;
 def bornin($lo; $hi): born as $t | $t != null and $t >= $lo and $t < $hi;
 # direct logins (hop lines, sorted) with a hop before $t and the next at/after it: {x: all, b: failed ones}
@@ -36,11 +44,6 @@ def inflight_sets($t): [$L[] | select(hop)] | group_by(.login_id) | map(sort_by(
   | {x: $x, b: [$x[] | select(any(.[]; .status >= 400 or .status == 0) or (any(.[]; .step == "login_token" and .status == 200) | not))]};
 def inflight($t; $what): inflight_sets($t) as {x: $x, b: $b}
   | verdict(($x | n) > 0 and $b == []; "\($x | n) logins with a hop before \($what) and the next after it, \($b | n) failed (last hop shown)") + {bad: [$b[][-1]]};
-# A flip's moment is known only as [switch, flipped] (rollback: [rollback, flipped]): the event is written before
-# set_active patches the Service, `flipped` after it; + grace for ingress-nginx to follow. No `flipped` (older runs,
-# fixtures): the event alone. acrossflip(times): a hop before a flip window's end and one at/after its start.
-def flipwin($t): if $t == null then empty
-  else [$t, ([$e[] | select(.event == "flipped") | .t | ts | select(. >= $t)] | min | if . == null then $t else . + $grace end)] end;
 def acrossflip($ts): ($ts | min) as $a | ($ts | max) as $z | any(flipwin($sw), flipwin($rb); $a < .[1] and $z >= .[0]);
 def refresh_ok($lo; $hi; $after; $what; $when):
   [$L[] | select(.step == "refresh" and .ts >= $after and bornin($lo; $hi))] as $a | [$a[] | select(.status != 200)] as $b
