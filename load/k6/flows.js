@@ -25,6 +25,9 @@ import { sleep } from 'k6';
 import exec from 'k6/execution';
 import { parseHTML } from 'k6/html';
 import encoding from 'k6/encoding';
+// A browser's Accept: text/html first (Spring and the legacy IdP redirect to their login page only for HTML clients),
+// */* last. A bare 'text/html' got 406 from the test client's text/plain pages (/, /frontchannel-logout); browsers don't.
+const HTML = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
 
 const SECRET = __ENV.K6_APP_SECRET;
 const PASSWORD = __ENV.LEGACY_USER_PASSWORD;
@@ -148,7 +151,7 @@ function hops(s, scenario, url, stepFn, done) {
   for (let hop = 0; hop < 14; hop++) {
     const step = stepFn(method, url), t0 = now();
     // Accept: text/html, or Spring answers 401 instead of redirecting to /login
-    const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: step } });
+    const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: HTML }, tags: { name: step } });
     log(s, scenario, step, t0, res, {});
     if (res.status === 0 || res.status >= 400) return null;
     if (res.status >= 300) {
@@ -211,7 +214,7 @@ export function logout() {
     // submit a logout-confirm form as-is if one is shown. (Stopping at the first 302 left the session alive.)
     for (let i = 0; i < 8; i++) {
       const t0 = now();
-      const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: 'logout' } });
+      const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers: { Accept: HTML }, tags: { name: 'logout' } });
       log(s, 'logout', 'logout', t0, res, {});
       if (res.status >= 300 && res.status < 400 && res.headers.Location) {
         method = 'GET'; url = abs(res.headers.Location, url); body = null;
@@ -302,12 +305,12 @@ export function app() {
   // RP-initiated logout like a browser: POST /logout (CSRF header) -> Keycloak end_session -> legacy IdP logout ->
   // Keycloak -> post_logout_redirect_uri on the app. On a page: load every <iframe> (front-channel logout URLs), submit
   // a form (logout confirm) or follow #continue (what the front-channel page's script does).
-  let method = 'POST', url = `${APP}/logout`, headers = { Accept: 'text/html', 'X-CSRF-TOKEN': s.csrf || '' }, body = null;
+  let method = 'POST', url = `${APP}/logout`, headers = { Accept: HTML, 'X-CSRF-TOKEN': s.csrf || '' }, body = null;
   for (let i = 0; i < 10; i++) {
     const step = logoutStepOf(url), t0 = now();
     const res = http.request(method, url, body, { redirects: 0, jar: s.jar, headers, tags: { name: step } });
     log(s, 'app', step, t0, res, {});
-    headers = { Accept: 'text/html' };
+    headers = { Accept: HTML };
     if (step === 'app_logout_done') break; // back on the app: logout chain complete
     if (res.status >= 300 && res.status < 400 && res.headers.Location) {
       method = 'GET'; url = abs(res.headers.Location, url); body = null;
@@ -316,7 +319,7 @@ export function app() {
     if (res.status !== 200) break;
     iframesOf(res.body, url).forEach((src) => {
       const f0 = now();
-      log(s, 'app', 'app_frontchannel', f0, http.get(src, { redirects: 0, jar: s.jar, headers: { Accept: 'text/html' }, tags: { name: 'app_frontchannel' } }), {});
+      log(s, 'app', 'app_frontchannel', f0, http.get(src, { redirects: 0, jar: s.jar, headers: { Accept: HTML }, tags: { name: 'app_frontchannel' } }), {});
     });
     const f = formOf(res.body, url);
     const next = f ? null : parseHTML(res.body).find('#continue').attr('href');
