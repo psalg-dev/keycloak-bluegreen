@@ -74,10 +74,11 @@ def info(v): {r: "INFO", d: "\(v)"};
 def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
 ($mode | sub("-rollback$"; "")) as $base |
 ($k | map(. + {ts: (.t_start | ts), te: (.t_end | ts)})) as $all
-# Requests k6 aborts itself on SIGINT (status 0, starting at/after load_stop) are not server behaviour: no rule sees them.
+# Requests k6 aborts itself on SIGINT (status 0, still in flight at load_stop: ending at/after it) are not server
+# behaviour: no rule sees them. By end, not start: build #20 had one started 17 ms before load_stop, aborted with the rest.
 | ev("load_stop") as $ls
-| [$all[] | select(.status == 0 and $ls != null and .ts >= $ls)] as $aborted
-| [$all[] | select((.status == 0 and $ls != null and .ts >= $ls) | not)] as $L
+| [$all[] | select(.status == 0 and $ls != null and .te >= $ls)] as $aborted
+| [$all[] | select((.status == 0 and $ls != null and .te >= $ls) | not)] as $L
 | ev("switch") as $sw | ev("copy_point") as $cp | ev("replay_done") as $rd
 | ev("rollback_start") as $rbs | ev("rollback") as $rb | ev("rollback_replay_done") as $rrd
 | ([$e[] | select(.event == "switch") | .to] | .[0]) as $new
