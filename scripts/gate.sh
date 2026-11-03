@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# gate.sh <shared|lossy|shared-rollback|lossy-rollback> <k6-lines.jsonl> <events.jsonl>
-# Reads the k6 request lines (schema: top of load/k6/flows.js) and the switch events (`event` in scripts/lib/kc.sh),
+# gate.sh <shared|lossy|shared-rollback|lossy-rollback> <k6-lines.jsonl> <events.jsonl> [apps.jsonl]
+# Reads the k6 request lines (schema: top of load/k6/flows.js), the switch events (`event` in scripts/lib/kc.sh) and
+# optionally the test apps' log lines (docs/test-apps-contract.md, `load.sh collect` -> out/apps.jsonl),
 # prints one row per rule (PASS/FAIL/SKIP + numbers, up to 5 offending lines) and exits 1 if any rule FAILs.
 # A rule whose precondition event is missing (e.g. no `switch`) is SKIP, not FAIL.
 # Interpretations (PLAN.md Slice 4):
@@ -12,15 +13,46 @@
 # - <base>-rollback = every <base> rule plus the flip back (`rollback` event, KEEP_OLD so nothing drained before it).
 #   lossy-rollback swaps invalid_grant_in_window for invalid_grant_phases and caps logout_after_replay at `rollback`.
 #   Reverse `replay` events are those with from = the switch's `to` color.
+# - lossok(birth; t) is THE "lost in the lossy window" excuse, shared by every rule that tolerates a lost session:
+#   lossy: born in [copy_point, switch]; lossy-rollback: born in [copy_point, switch] and failing in [switch,
+#   rollback+grace), or born in (switch, rollback) and failing after rollback; shared*: never.
+# App rules (scripts/gate/apps.jq; SKIP without app lines / apps.jsonl, every mode):
+# - App session = one app login_id; born = t_end of its app callback hop; sid from its /me. Logout = its POST /logout
+#   (app_logout_start); completed = it has an app_me_after_logout line (logouts cut by the k6 stop have none: not judged).
+# - app_login_ok: every app login that reached /me got 200. Lossy modes: a login whose hops straddle switch/rollback is
+#   excused (its auth session/code lives on one color only; direct logins are not gated for this either).
+# - introspection_ok: no testresource introspection with error/non-200, no k6 introspect call with upstream 5xx/0, and
+#   no upstream 401 (= inactive) on a live session (k6 never calls after logout) unless lossok.
+# - jwt_ok: every k6 JWT call that reached the resource server got 200. JWTs are validated locally against the same
+#   realm keys on both colors, so no lossy excuse.
+# - app_refresh_ok: no testclient refresh with ok != true and no k6 app call with error invalid_grant, except
+#   invalid_grant under lossok. NB with Keycloak's default 300 s access token the app (sessions <= ~140 s) never
+#   refreshes: SKIP unless the testclient-* clients get a shorter access token lifespan.
+# - backchannel_delivered: every completed bc logout has an ok backchannel_logout event for its sid at the app within
+#   10 s of POST /logout. Reading for lossy modes: Keycloak sends the back-channel call only for a session it knows. The
+#   color serving end_session does not know a session that lives only on the other color: born in the forward window
+#   [copy_point, switch] (not copied to green) and logged out after the switch, or (rollback) born on green and logged
+#   out after the flip back. Exactly lossok(born; logout start), so it is gated, not just reported. Logouts outside the
+#   apps.jsonl time range (rotated away, or < 10 s before its end) are not judged. backchannel_late (> 2 s) is INFO.
+# - frontchannel_ok: every completed fc logout's page had >= 1 iframe (the front-channel URL), every iframe fetch got
+#   200, the app logged a frontchannel_logout for the sid (when inside the apps.jsonl range), /me after logout is 401.
+#   The first three are excused under lossok (Keycloak renders no iframe for a session it doesn't know). found_session
+#   is reported, NOT gated: Spring's POST /logout already ends the local session before Keycloak calls the
+#   front-channel URL, so found_session=false is expected unless the app keeps a sid registry of its own [assumed].
+# - logout_effective: every completed app logout's /me after logout is 401, and no k6 app call or testclient call
+#   event with that sid succeeded (status 200, upstream 200) after it.
+# - latency_*: INFO p50/p95/p99 per step class in pre / cutover / post (windows: scripts/gate/apps.jq);
+#   latency_regression lists classes with cutover p95 > 2x pre p95. Reported, not gated.
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/lib/kc.sh"
 TAG=verification
 
-mode=${1:-} k6=${2:-} ev=${3:-}
+mode=${1:-} k6=${2:-} ev=${3:-} apps=${4:-/dev/null}
 base=${mode%-rollback}
-[[ ($base == shared || $base == lossy) && -f $k6 ]]   || die "usage: gate.sh <shared|lossy|shared-rollback|lossy-rollback> <k6-lines.jsonl> <events.jsonl>"
+[[ ($base == shared || $base == lossy) && -f $k6 ]]   || die "usage: gate.sh <shared|lossy|shared-rollback|lossy-rollback> <k6-lines.jsonl> <events.jsonl> [apps.jsonl]"
 [[ -f $ev ]] || { log "no events file '$ev': treating as empty"; ev=/dev/null; }
+[[ -f $apps || $apps == /dev/null ]] || { log "no apps file '$apps': treating as empty"; apps=/dev/null; }
 # ponytail: probes this soon after replay_done may still hit a pod whose session cache is ~100 ms stale (stateless outbox).
 GRACE=${GATE_GRACE_SECONDS:-1}
 
@@ -37,6 +69,7 @@ def verdict(ok; d): {r: (if ok then "PASS" else "FAIL" end), d: d};
 def skip(d): {r: "SKIP", d: d};
 def info(v): {r: "INFO", d: "\(v)"};
 def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
+($mode | sub("-rollback$"; "")) as $base |
 ($k | map(. + {ts: (.t_start | ts), te: (.t_end | ts)})) as $all
 # Requests k6 aborts itself on SIGINT (status 0, starting at/after load_stop) are not server behaviour: no rule sees them.
 | ev("load_stop") as $ls
@@ -47,6 +80,11 @@ def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
 | ([$e[] | select(.event == "switch") | .to] | .[0]) as $new
 | ([$L[] | select(.step == "login_token" and .status == 200) | {key: .login_id, value: .te}] | from_entries) as $born
 | def born: $born[.login_id // ""];
+def lossok($t; $at): $t != null and $cp != null and $sw != null and
+  if $mode == "lossy" then $t >= $cp and $t <= $sw
+  elif $mode == "lossy-rollback" then $rb != null
+    and (($t >= $cp and $t <= $sw and $at >= $sw and $at < $rb + $grace) or ($t > $sw and $t < $rb and $at >= $rb))
+  else false end;
 def bornin($lo; $hi): born as $t | $t != null and $t >= $lo and $t < $hi;
 def inflight($t; $what): [$L[] | select(hop)] | group_by(.login_id) | map(sort_by(.ts))
   | [.[] | select(. as $h | any(range(0; n - 1); $h[.].ts < $t and $h[. + 1].ts >= $t))] as $x
@@ -58,6 +96,7 @@ def refresh_ok($lo; $hi; $after; $what; $when):
 def probes_ig($from; $to; $what): [$L[] | select(.step == "logout_probe" and .ts >= $from + $grace and .ts < $to)] as $a
   | [$a[] | select(ig | not)] as $b | verdict($a != [] and $b == []; "\($a | n) probes after \($what), \($b | n) not invalid_grant") + {bad: $b};
 '
+PRE+=$(<"$(dirname "$0")/gate/apps.jq")$'\n' # app rules + defs (newline: the rule body follows)
 
 fails=0
 # why <rule>: the rule's "why it matters" line from scripts/gate/why.tsv (every rule should have one)
@@ -68,7 +107,7 @@ why() {
 # rule <name> <jq expr yielding {r, d, bad?}>
 rule() {
   local out head r
-  out=$(jq -nr --slurpfile k "$k6" --slurpfile e "$ev" --argjson grace "$GRACE" \
+  out=$(jq -nr --slurpfile k "$k6" --slurpfile e "$ev" --slurpfile a "$apps" --argjson grace "$GRACE" --arg mode "$mode" \
     "$PRE ($2) | \"\(.r)\t\(.d)\", ((.bad // [])[:5][] | del(.ts, .te) | tojson)")
   head=${out%%$'\n'*} r=${head%%$'\t'*}
   printf '%-32s %-5s %s\n' "$1" "$r" "${head#*$'\t'}"
@@ -77,7 +116,7 @@ rule() {
   [[ $r != FAIL ]] || fails=$((fails + 1))
 }
 
-echo "gate $mode: $(wc -l < "$k6") k6 lines; events:"
+echo "gate $mode: $(wc -l < "$k6") k6 lines, $(wc -l < "$apps") app lines; events:"
 jq -r '"  \(.t) \(.event)"' "$ev"
 printf '%-32s %-5s %s\n' RULE STATE DETAIL
 
@@ -98,6 +137,25 @@ rule claims_present '[$L[] | select(tok)] as $a
 rule sub_stable '[$L[] | select(.sub != null and .user != null)] | group_by(.user)
   | [.[] | select(map(.sub) | unique | n > 1)] as $b
   | verdict($b == []; "\(n) users, \($b | n) with more than one sub") + {bad: [$b[] | {user: .[0].user, subs: (map(.sub) | unique)}]}'
+}
+
+# --- test apps (k6 scenario app + apps.jsonl), every mode; rules in scripts/gate/apps.jq, readings in the header
+{
+rule app_login_ok r_app_login
+rule introspection_ok r_introspection
+rule jwt_ok r_jwt
+rule app_refresh_ok r_app_refresh
+rule backchannel_delivered r_backchannel
+rule backchannel_late r_backchannel_late
+rule frontchannel_ok r_frontchannel
+rule logout_effective r_logout_effective
+rule latency_login 'lat("login")'
+rule latency_token 'lat("token")'
+rule latency_refresh 'lat("refresh")'
+rule latency_app_call_jwt 'lat("app_call_jwt")'
+rule latency_app_call_introspect 'lat("app_call_introspect")'
+rule latency_introspection 'lat("introspection")'
+rule latency_regression r_latency_regression
 }
 
 # --- shared (patch case); shared-rollback adds the flip back (same DB, so nothing may be lost either way)
@@ -126,15 +184,14 @@ rule refresh_pre_copy 'if $cp == null or $sw == null then skip("needs copy_point
   refresh_ok(-1e18; $cp; $sw; "before copy_point"; "switch") end'
 if [[ $mode == lossy ]]; then
 rule invalid_grant_in_window 'if $cp == null or $sw == null then skip("needs copy_point + switch") else
-  [$L[] | select(.step == "refresh" and ig)] as $a | [$a[] | select((born // -1) as $t | $t < $cp or $t > $sw)] as $b
+  [$L[] | select(.step == "refresh" and ig)] as $a | [$a[] | select(lossok(born; .ts) | not)] as $b
   | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) on sessions not born in [copy_point, switch]") + {bad: $b} end'
 rule logout_after_replay 'if $rd == null then skip("no replay_done event") else probes_ig($rd; 1e18; "replay_done+\($grace)s") end'
 else
 # Blue window sessions [copy_point, switch] are lost on green only; green's sessions (switch, rollback) are lost on blue.
 rule invalid_grant_phases 'if $cp == null or $sw == null or $rb == null then skip("needs copy_point + switch + rollback") else
   [$L[] | select(.step == "refresh" and ig)] as $a
-  | [$a[] | select((born // -1) as $t | ($t >= $cp and $t <= $sw and .ts >= $sw and .ts < $rb + $grace)
-      or ($t > $sw and $t < $rb and .ts >= $rb) | not)] as $b
+  | [$a[] | select(lossok(born; .ts) | not)] as $b
   | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) not (born in [copy_point, switch] and lost in [switch, rollback+\($grace)s)) nor (born in (switch, rollback) and lost after rollback)") + {bad: $b} end'
 rule logout_after_replay 'if $rd == null or $rb == null then skip("needs replay_done + rollback") else
   probes_ig($rd; $rb; "replay_done+\($grace)s and before rollback") end'

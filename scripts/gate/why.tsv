@@ -33,3 +33,18 @@ reverse_logouts_replayed	logouts from the new version carried back onto the old 
 reverse_users_replayed	users created on the new version, recreated on the old one with the same id by the rollback
 resurrection_seconds_rollback	exposure window after a rollback during which a logout made on the new version could still be undone
 window_sessions_back	sessions from the forward window that work again after rolling back to the old DB (they were never really gone there)
+app_login_ok	a real app's login (app -> Keycloak -> legacy IdP -> app) must end with an app session; a failure is a user who clicked "log in" and is not logged in
+introspection_ok	resource servers that introspect ask Keycloak on every request; an introspection error or a false "inactive" rejects a logged-in user's API call (a 401 in the middle of their work)
+jwt_ok	resource servers validate JWTs locally against Keycloak's keys and issuer; a rejected JWT from a live session means every API call of that user fails
+app_refresh_ok	apps refresh tokens through their OAuth2 library and do NOT re-login on their own; a lost refresh means the user is thrown out of the app at the next token expiry
+backchannel_delivered	apps learn about a Keycloak logout only through the back-channel call; if it is missing, the app session outlives the logout (the user thinks they logged out but the app still lets them in: security)
+backchannel_late	slow back-channel delivery widens the time in which an app still serves a session that Keycloak already ended
+frontchannel_ok	front-channel apps are logged out by the browser loading their logout URL from Keycloak's logout page; if the URL is missing or does nothing, the app session survives the logout (security)
+logout_effective	after a user logs out of an app, nothing may keep working with that session; a successful call after logout is a logout that did not protect the user (security)
+latency_login	login hop latency before / during / after the cutover: how much slower logging in feels while we deploy
+latency_token	code-exchange latency before / during / after the cutover: the last step of every login
+latency_refresh	token refresh latency before / during / after the cutover: every logged-in client pays it in the background
+latency_app_call_jwt	end-to-end latency of an app's API call with a locally validated JWT (includes the app's token refresh): what users of the app feel
+latency_app_call_introspect	end-to-end latency of an app's API call validated by introspection: every such call waits on Keycloak, so a slow Keycloak slows the app
+latency_introspection	Keycloak's introspection latency as the resource server sees it: the direct cost of the cutover on every introspecting API
+latency_regression	step classes whose p95 during the cutover is more than twice their pre-switch p95: where users feel the deployment even without errors

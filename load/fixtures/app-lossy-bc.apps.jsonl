@@ -1,0 +1,1 @@
+{"app":"testclient","t":"2026-11-02T22:21:34.200Z","event":"backchannel_logout","registration":"bc-net2","sid":"sid-b3","sub":"5f0c2a7e-91d3-4b6a-8e2f-000000000613","iss":"https://kc-net2.localtest.me/keycloak/realms/demo","ok":true,"error":null}
