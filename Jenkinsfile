@@ -38,13 +38,16 @@ kube_connect
     stage('Gate') { steps { script { phase('gate') } } }
   }
   post {
-    failure {
-      // a failed stage must not leave k6 hammering the cluster; collect what it has for the post-mortem
-      sh '''#!/usr/bin/env bash
-scripts/load.sh stop || true # stderr stays: log() writes there (build #10 lost its k6 lines silently)
-'''
-    }
     always {
+      // A failed stage must not leave k6 hammering the cluster; collect its lines (out/k6.jsonl) for the post-mortem.
+      // Here, not in post { failure }: declarative runs `always` first, so `failure` came after the archive (build #10).
+      script {
+        if (currentBuild.currentResult == 'FAILURE') {
+          sh '''#!/usr/bin/env bash
+scripts/load.sh stop || true
+'''
+        }
+      }
       // Report: one HTML page over EVERY out/<case>/ in the workspace, i.e. this build's case plus the cases earlier
       // builds left there (the workspace keeps out/; docs/failure-modes.md says how to reset it). In post, not a stage, so it
       // also runs when a stage or the gate failed. A report failure marks the build UNSTABLE, never hides the result.

@@ -14,6 +14,7 @@ what=${1:?case|all} phase=${2:-all}
 phases=(reset install warmup switch rollback cooldown gate)
 
 if [[ $what == all ]]; then
+  [[ $phase == all ]] || die "all runs every case end to end; run single phases per case"
   # one process per case: `set -e` is ignored inside a function called as `f || rc=1`
   rc=0; mapfile -t cases < <(awk '!/^#/ && NF {print $1}' cases.env)
   for c in "${cases[@]}"; do "$0" "$c" || rc=1; done; exit "$rc"
