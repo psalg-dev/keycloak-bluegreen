@@ -12,8 +12,7 @@ LNS=load
 # Secret -> namespace it is copied from. ponytail: k6-app assumed in ns keycloak (Slice 2 owns it).
 declare -A SRC=([legacy-idp]=legacy [demo-ca]=keycloak [k6-app]=keycloak)
 
-copy_secret() { # <name> <from-ns>
-  kubectl -n "$LNS" get secret "$1" >/dev/null 2>&1 && return
+copy_secret() { # <name> <from-ns>: always re-synced; a copy made once went stale when the demo CA was rotated
   kubectl -n "$2" get secret "$1" -o json \
     | jq --arg ns "$LNS" '{apiVersion, kind, type, data, metadata: {name: .metadata.name, namespace: $ns}}' \
     | kubectl apply -f - >/dev/null || die "secret $1 not found in ns $2 (needed in ns $LNS)"
