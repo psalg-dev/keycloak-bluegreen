@@ -22,7 +22,7 @@ cool down 90 s, stop the load, gate (`scripts/demo.sh`).
 | `reads` | 1/s per network | discovery + JWKS. |
 | `app` | 3 VUs | browser login through the test client app, `/call/jwt` and `/call/introspect` every 5 s for 30-120 s, then a logout with back- or front-channel delivery: half `initiator: app` (POST /logout at the app, which ends its own session first), half `initiator: kc` (the browser logs out at Keycloak's end_session directly while the app holds its session: only the channel call can end it). |
 
-Roughly 25-30 k6 requests/s, 10 000-20 000 lines per case. Every request is one JSON line (schema at the top of
+Roughly 25-30 k6 requests/s, 12 000-31 000 lines per case. Every request is one JSON line (schema at the top of
 `flows.js`); the switch scripts write one JSON line per step to `events.jsonl` (`event` in `scripts/lib/kc.sh`). The
 test apps (once built) log one JSON line per login/call/refresh/logout/introspection to `apps.jsonl`
 (`docs/test-apps-contract.md`). Nothing else is measured: no server-side metrics, no edge logs.

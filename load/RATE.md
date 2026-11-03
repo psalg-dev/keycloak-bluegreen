@@ -1,6 +1,6 @@
 # Load-rate baseline
 
-Baseline: **about 10 000 k6 lines per case** on both profiles, so a five-case run stays short (collection, gate and
+Baseline: **about 12 000-31 000 k6 lines per case (measured)** on both profiles, so a five-case run stays short (collection, gate and
 report all scale with the line count). Windows, thresholds and bounds are in
 [docs/failure-modes.md](../docs/failure-modes.md).
 
@@ -22,7 +22,7 @@ Set in `scripts/lib/kc.sh` (per `PROFILE`), `scripts/load.sh` and `load/k6/flows
 
 | rate | profile | per case | notes |
 |---|---|---|---|
-| 2 logins/s, 10/4/3 VUs | default + laptop | ~10 000-20 000 | this baseline |
+| 2 logins/s, 10/4/3 VUs | default + laptop | 12 639-30 730 | this baseline (builds #44-#48) |
 | 5 logins/s, 10/4/6 VUs | default | 29 059-69 258 | earlier runs, builds #33-#37 |
 | 18 logins/s, 36/14/22 VUs | default | 106 171 (`patch`) | build #41, passed after the legacy IdP got 1.5 GiB; too slow per run to keep |
 
