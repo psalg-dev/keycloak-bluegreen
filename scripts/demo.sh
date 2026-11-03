@@ -21,10 +21,32 @@ fi
 read -r _ from to fp tp mech < <(awk -v c="$what" '$1 == c' cases.env) || true
 [[ -n ${mech:-} ]] || die "no case '$what' in cases.env"
 
-run_phase() {
-  log "--- $what: $1"
+# explain <phase>: a header saying what the phase does and why, in this case's terms
+explain() {
+  local n i db=shared; [[ $mech == lossy* ]] && db="own DB per color"
+  for i in "${!phases[@]}"; do [[ ${phases[$i]} == "$1" ]] && n=$((i + 1)); done
+  local title text
   case $1 in
-    reset) log "=== case $what: $from -> $to ($mech)"; scripts/reset.sh ;;
+    reset) title="Reset" text="Remove both colors, k6, any freeze and every DB; wait until CNPG has really cleaned up, then create a fresh pg-1. Every case starts from the same empty state." ;;
+    install) title="Install" text="Blue at $from (provider v$fp) on pg-1, then the config-cli stages bootstrap -> online -> maintenance (no traffic yet, so breaking changes are fine), then 4000 users pre-linked to legacy-net1." ;;
+    warmup) title="Load + warm-up" text="Start k6 in the cluster: brokered logins on net1/net2, refreshes every 5 s, logouts with probes that must stay logged out, discovery/JWKS reads. ${WARMUP_SECONDS:-120} s so sessions exist BEFORE the switch." ;;
+    switch)
+      case $mech in
+        shared*) title="Switch (shared DB)" text="Green $to (provider v$tp) next to blue on the same pg-1, own Infinispan cluster; online config through green; flip kc-active; kill one pod per color mid-traffic; drain blue$([[ $mech == *-rollback ]] && echo " (no: it stays up for the rollback)")." ;;
+        lossy*) title="Switch (lossy overlap)" text="Green's own DB = streaming replica of pg-1; freeze admin/account only; copy point; promote; green $to migrates the schema on its copy; replay blue's logouts + user creations onto green; flip; replay again after the drain. Login/token never stop.$([[ $mech == *-rollback ]] && echo " Blue and its DB stay up for the rollback.")" ;;
+      esac ;;
+    rollback) title="Soak + rollback" text="Let traffic run ${SOAK_SECONDS:-90} s on the new color (new sessions, logouts), then roll back to blue. Shared DB: just the flip. Own DB: back to blue's old DB, after reverse-replaying green's logouts and user creations." ;;
+    cooldown) title="Cool-down" text="Keep k6 running ${COOLDOWN_SECONDS:-90} s on the final color: the gate needs refreshes of older sessions and logout probes AFTER the switch/replay. Then stop k6 (requests it aborts itself are excluded) and collect its lines into out/$what/." ;;
+    gate) title="Gate" text="Judge out/$what/ (k6 lines + switch events): no 5xx, issuer stable per network, same sub per user, in-flight logins and refresh tokens survive, logged-out sessions stay logged out (+ the $mech rules)." ;;
+  esac
+  log "=== [$n/${#phases[@]}] $title ($what: $from -> $to, $db)"
+  fold -s -w 110 <<<"$text" | sed 's/^/    /' >&2
+}
+
+run_phase() {
+  explain "$1"
+  case $1 in
+    reset) scripts/reset.sh ;;
     install) first_install "$from" "$fp" pg-1 ;;
     warmup) scripts/load.sh start; wait_progress "${WARMUP_SECONDS:-120}" warm-up ;;
     switch)
