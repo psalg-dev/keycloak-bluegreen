@@ -3,6 +3,7 @@ pipelineJob('kc-bluegreen') {
   parameters {
     choiceParam('CASE', ['patch', 'minor', 'major', 'patch-rollback', 'minor-rollback'], 'Upgrade case (FROM/TO versions come from cases.env); *-rollback = switch, soak, roll back. One build per case: the report (post step) collects every case the workspace holds.')
     booleanParam('RUN_MAINTENANCE', false, 'Also run the config-cli maintenance stage (breaking changes, behind a freeze). Exported as true|false.')
+    choiceParam('PROFILE', ['default', 'laptop'], 'Must match the profile the cluster was created with (PROFILE=laptop docker compose up launcher); a mismatch fails the build at its first cluster change (Reset). laptop = 2 Keycloak pods/color, 2 Postgres instances, 2 zones (scripts/lib/kc.sh).')
   }
   definition {
     cpsScm {

@@ -6,6 +6,10 @@ services:
     image: kc-bluegreen/launcher:local
     working_dir: /repo
     command: ["bash", "scripts/up.sh"]
+    # 16 GB laptop: `PROFILE=laptop docker compose up launcher` (creates the cluster in that profile), then
+    # `PROFILE=laptop docker compose run --rm launcher scripts/demo.sh all` (Jenkins: build parameter PROFILE=laptop).
+    environment:
+      PROFILE: ${PROFILE:-default}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/repo

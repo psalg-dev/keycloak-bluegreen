@@ -4,7 +4,7 @@ metadata:
   name: ${DB}
   namespace: ${NS}
 spec:
-  instances: 3
+  instances: ${PG_INSTANCES} # scripts/lib/kc.sh: 3 (default), 2 (PROFILE=laptop)
   postgresql:
     synchronous:
       method: any

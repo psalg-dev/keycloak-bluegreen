@@ -183,6 +183,7 @@ If the 25 vs 26 SPI forces a code difference, isolate it in one class per profil
 - Everything: `docker compose up -d` -> Jenkins at :8081, job `kc-bluegreen` (params: `CASE` = patch|minor|major,
   `RUN_MAINTENANCE`; FROM/TO versions come from `cases.env`, one line per case, so they are never typed by hand).
 - All three demos without clicking: `docker compose run --rm launcher scripts/demo.sh all`
+- 16 GB laptop (2026-11-03): `PROFILE=laptop` on every compose/Jenkins run (2 workers, 2 pods/color, 2 PG instances; scripts/lib/kc.sh)
 - Unit: `mvn -f providers verify` (in the jenkins image)
 - Static: `shellcheck scripts/*.sh scripts/lib/*.sh`, and `helm template` + `kubeconform` on values
 - The real test is the gate (Slice 4). Every path slice is done only when its gate is green in a real run.
