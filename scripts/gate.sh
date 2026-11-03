@@ -77,8 +77,9 @@ rule has_lines 'verdict($L | n > 0; "\($L | n) k6 lines")'
 rule issuer_stable '[$L[] | select(.iss != null)] as $a
   | [$a[] | select(.iss != "https://kc-\(.net).localtest.me/keycloak/realms/demo")] as $b
   | verdict($a != [] and $b == []; "\($a | n) issuers (\([$a[] | select($sw == null or .ts < $sw)] | n) before switch), \($b | n) not the one of their net") + {bad: $b}'
-rule no_5xx '[$L[] | select(.status >= 500 or .status == 0)] as $b
-  | verdict($b == []; "\($b | n) of \($L | n) responses >= 500 or status 0") + {bad: $b}'
+rule no_5xx 'ev("load_stop") as $ls | [$L[] | select(.status == 0 and $ls != null and .ts >= $ls)] as $abort
+  | [$L[] | select(.status >= 500 or (.status == 0 and ($ls == null or .ts < $ls)))] as $b
+  | verdict($b == []; "\($b | n) of \($L | n) responses >= 500 or status 0 (\($abort | n) aborted by the k6 stop, not counted)") + {bad: $b}'
 rule reads_ok '[$L[] | select(.scenario == "reads")] as $a | [$a[] | select(.status != 200)] as $b
   | verdict($a != [] and $b == []; "\($a | n) reads, \($b | n) not 200") + {bad: $b}'
 rule claims_present '[$L[] | select(tok)] as $a

@@ -10,6 +10,10 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+import org.springframework.security.oauth2.server.authorization.InMemoryOAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2Authorization;
+import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
+import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
@@ -24,6 +28,24 @@ public class LegacyIdpApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(LegacyIdpApplication.class, args);
+    }
+
+    /**
+     * Spring's in-memory store is not safe under concurrent load: findByToken iterates a synchronizedMap-wrapped
+     * LinkedHashMap without holding its lock while authorize requests put into it. Under k6 that threw
+     * ConcurrentModificationException on /oauth2/token and Keycloak's broker answered 502 (2026-11-02).
+     * ponytail: one lock around everything; a test IdP at a few logins/s. JDBC store if it ever has to scale.
+     */
+    @Bean
+    OAuth2AuthorizationService authorizationService() {
+        return new SerializedAuthorizationService(new InMemoryOAuth2AuthorizationService());
+    }
+
+    record SerializedAuthorizationService(OAuth2AuthorizationService d) implements OAuth2AuthorizationService {
+        @Override public synchronized void save(OAuth2Authorization a) { d.save(a); }
+        @Override public synchronized void remove(OAuth2Authorization a) { d.remove(a); }
+        @Override public synchronized OAuth2Authorization findById(String id) { return d.findById(id); }
+        @Override public synchronized OAuth2Authorization findByToken(String t, OAuth2TokenType type) { return d.findByToken(t, type); }
     }
 
     /** user0001..userNNNN sharing one password, hashed once (thousands of bcrypt hashes would take minutes). */

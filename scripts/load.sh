@@ -42,6 +42,7 @@ start)
 collect) collect ;;
 stop)
   p=$(pod); [[ -n $p ]] || die "no k6 pod in ns $LNS"
+  event load_stop # the gate ignores status-0 lines after this: requests k6 itself aborts on SIGINT
   kubectl -n "$LNS" exec "$p" -- pkill -INT k6 2>/dev/null || true # already finished is fine
   for _ in $(seq 60); do
     kubectl -n "$LNS" exec "$p" -- grep -q '^k6 exited' /out/k6.log 2>/dev/null && break
