@@ -9,7 +9,7 @@
 :root {
   color-scheme: light;
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,.10); --shade: rgba(42,120,214,.09);
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,.10); --shade: rgba(42,120,214,.14);
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
   --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --goodtext: #006300;
 }
@@ -17,7 +17,7 @@
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.16);
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.22);
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
     --goodtext: #0ca30c;
   }
@@ -25,7 +25,7 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
-  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.16);
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.22);
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
   --goodtext: #0ca30c;
 }
@@ -143,9 +143,15 @@ Chart.register({
     if (!o || !o.c) return;
     const { ctx, chartArea: a, scales: { x } } = chart;
     ctx.save(); ctx.fillStyle = css('--shade');
+    const bands = [];
     for (const [s, e] of o.c.windows) {
       const x0 = Math.max(a.left, x.getPixelForValue(s)), x1 = Math.min(a.right, x.getPixelForValue(e));
-      if (x1 > x0) ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
+      if (x1 > x0) { ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top); bands.push([x0, x1]); }
+    }
+    // the band edges: the cutover is a section of the run, not a point
+    ctx.strokeStyle = css('--s2'); ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+    for (const [x0, x1] of bands) {
+      ctx.beginPath(); ctx.moveTo(x0, a.top); ctx.lineTo(x0, a.bottom); ctx.moveTo(x1, a.top); ctx.lineTo(x1, a.bottom); ctx.stroke();
     }
     ctx.restore();
   },
@@ -222,6 +228,28 @@ function renderCase(c, root) {
     h('details', {}, h('summary', {}, 'events (' + c.events.length + ')'), h('div', { class: 'scroll' }, h('table', {},
       h('tr', {}, h('th', { class: 'num' }, 't'), h('th', {}, 'event'), h('th', {}, 'detail')),
       c.events.map((e) => h('tr', {}, h('td', { class: 'num' }, secs(e.x)), h('td', {}, h('code', {}, e.event)), h('td', {}, e.d))))))));
+
+  // run overview: one chart over the whole run: latency percentiles (left, ms) and errors/s (right),
+  // with the cutover window(s) shaded and the switch/rollback drawn as a solid line
+  const ovS = c.series, ovL = c.latency;
+  if (ovS && ovL && ovL.all) {
+    const cv = h('canvas');
+    root.append(h('h3', {}, 'Run overview: latency and errors (' + ovL.B + ' s buckets)'),
+      h('div', { class: 'card' }, h('div', { class: 'chart' }, cv),
+        h('p', { class: 'legendnote' }, 'p50 / p95 / p99 of every judged request (left, ms, log) and errors per second (right). Shaded section: the cutover window(s) (definition in docs/failure-modes.md); solid vertical line: switch or rollback.')));
+    charts.push(() => {
+      const ks = Object.keys(ovS.err || {});
+      const tot = ovS.req.map((_, i) => ks.reduce((t, k) => t + ((ovS.err[k] || [])[i] || 0), 0));
+      const o = baseOpts(c, xr, 'ms (log)');
+      o.scales.y = { type: 'logarithmic', position: 'left', ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'ms (log)' }, grid: { color: css('--grid') }, border: { display: false } };
+      o.scales.y1 = { position: 'right', beginAtZero: true, ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'errors/s' }, grid: { drawOnChartArea: false }, border: { display: false } };
+      const ds = ['p50', 'p95', 'p99'].map((p, j) => ({ label: p, yAxisID: 'y', data: ovL.all[p].map((y, i) => ({ x: xs(ovL, i, true), y })),
+        borderColor: css(['--s1', '--s2', '--s3'][j]), backgroundColor: css(['--s1', '--s2', '--s3'][j]), borderWidth: 2, pointRadius: 0, pointHitRadius: 6, spanGaps: false }));
+      ds.push({ label: 'errors/s', yAxisID: 'y1', data: tot.map((y, i) => ({ x: xs(ovS, i, true), y })),
+        borderColor: css('--s8'), backgroundColor: css('--s8'), borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6 });
+      return new Chart(cv, { type: 'line', data: { datasets: ds }, options: o });
+    });
+  }
 
   // failure modes
   root.append(h('h3', {}, 'Failure modes'),

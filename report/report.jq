@@ -126,7 +126,8 @@ def cls:
     | (map(. + {b: (((.ts - $T0) / $LB) | floor)}) | group_by(.b) | map({key: (.[0].b | tostring), value: (map(.ms) | sort)}) | from_entries) as $m
     | {p50: [$r[] | ($m[.] // []) | pct(0.5) | r(10)], p95: [$r[] | ($m[.] // []) | pct(0.95) | r(10)], p99: [$r[] | ($m[.] // []) | pct(0.99) | r(10)]};
   (if $lbs == [] then null
-   else {B: $LB, x0: (($lbs | min) * $LB), cls: (reduce ($lat | group_by(.c))[] as $g ({}; . + {($g[0].c): ($g | lseries)}))} end) as $latseries
+   else {B: $LB, x0: (($lbs | min) * $LB), all: ($lat | lseries),
+         cls: (reduce ($lat | group_by(.c))[] as $g ({}; . + {($g[0].c): ($g | lseries)}))} end) as $latseries
 | regress as $lr   # the gate's latency_regression classes (scripts/gate/apps.jq)
 
 # --- error/request rate series, 2 s buckets: k6 line classes + app failures
