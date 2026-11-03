@@ -56,6 +56,7 @@ check "no external @import/url()" no_url "@import|url\([\"']?(https?:)?//"
 check "Chart.js inlined" grep -q "Chart.js v4" "$html"
 check "contract has 16 failure-mode ids" jq -e 'length == 16' <<<"$ids"
 check "every case: failure-mode table = contract ids, in order" data --argjson ids "$ids" '[.cases[] | [.modes[].id] == $ids] | all'
+check "every failure-mode id has a one-line explainer (report/modes.tsv)" data '(([.cases[].modes[].id] | unique) - [.modes[] | select(.why != null and (.why | length) > 15) | .id]) | length == 0'
 check "no data -> 'nodata' verdict, never a 0 rate" data '[.cases[].modes[] | (.attempts // 0) > 0 or (.verdict == "nodata" and .rate == null)] | all'
 check "every case has a gate verdict and time series" data '[.cases[] | .gate.verdict != null and .series != null] | all'
 # Report and gate never disagree: the report recomputes each gate rule a mode names with the gate's own defs.

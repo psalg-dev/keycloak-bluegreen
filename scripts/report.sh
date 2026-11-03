@@ -35,7 +35,12 @@ done < <(awk '!/^#/ && NF' cases.env)
 ((n)) || die "no <case>/k6.jsonl under '$out' for any case in cases.env"
 
 # Markers sit alone on their template lines. `<` is escaped so no string in the data can close the <script>.
-jq -sc --arg generated "$(date -u +%FT%TZ)" '{generated: $generated, cases: .}' "$tmp"/[0-9]*.json | sed 's/</\\u003c/g' > "$tmp/data"
+# The failure modes' one-line explainers (report/modes.tsv) travel with the data, so the matrix in the page says what
+# each mode means to a user instead of only its id.
+jq -sc --arg generated "$(date -u +%FT%TZ)" --rawfile modes report/modes.tsv \
+  '{generated: $generated,
+    modes: ($modes | split("\n") | map(select(length > 0) | split("\t") | select(length >= 2) | {id: .[0], why: .[1]})),
+    cases: .}' "$tmp"/[0-9]*.json | sed 's/</\\u003c/g' > "$tmp/data"
 while IFS= read -r line; do
   case $line in
     *'<!--CHARTJS-->'*) grep -v '^//# sourceMappingURL=' "$V/chart.umd.min.js" ;;

@@ -1,0 +1,16 @@
+http_5xx	the server answered 5xx: an error page or a failed API call
+net_error	the connection failed or was cut mid-flight: a browser network error
+login_failed	a brokered login ended without a token: that person had to start over
+inflight_login_broken	a login started before the flip and finished after it: the user must not be thrown out
+refresh_lost_session	the refresh token was gone (invalid_grant): the app silently re-logs in through the legacy IdP
+refresh_other_error	a refresh failed for another reason (timeout, 5xx): the session stalls until the client retries
+introspection_error	the resource server's introspection call failed: its API answers 500
+introspection_false_inactive	introspection said active:false for a valid token: the API answers 401
+jwt_rejected	the resource server refused the JWT (signature, iss or aud): the call is 401
+issuer_mismatch	a token's iss does not match the host the client called: silent auth failures at that address
+sub_changed	the same person got a different sub: every downstream account link is broken
+logout_not_effective	after the logout the session still works (refresh or /me): the user is not really out
+backchannel_missing	Keycloak's back-channel logout never reached the app: its session survives the logout
+backchannel_late	the back-channel logout arrived, but more than 2 s after the logout
+frontchannel_failed	the front-channel logout did not end the app's session: the app thinks the user is in
+latency_regression	a step class's p95 inside the cutover window is over 2x its pre-switch p95
