@@ -45,6 +45,24 @@ scripts/load.sh stop 2>/dev/null || true
 '''
     }
     always {
+      // Report: one HTML page over EVERY out/<case>/ in the workspace, i.e. this build's case plus the cases earlier
+      // builds left there (the workspace keeps out/; docs/failure-modes.md says how to reset it). In post, not a stage, so it
+      // also runs when a stage or the gate failed. A report failure marks the build UNSTABLE, never hides the result.
+      script {
+        withEnv(["BUILD_START=${currentBuild.startTimeInMillis.intdiv(1000)}"]) {
+          int rc = sh(returnStatus: true, script: '''#!/usr/bin/env bash
+set -euo pipefail
+# build/commit for the case dirs THIS build wrote (k6.jsonl newer than the build start); older dirs keep theirs
+for k in out/*/k6.jsonl; do
+  [[ -f $k && $(stat -c %Y "$k") -ge $BUILD_START ]] || continue
+  jq -n --arg build "$BUILD_NUMBER" --arg commit "${GIT_COMMIT:-}" --arg url "${BUILD_URL:-}" \\
+    '{build: $build, commit: $commit, url: $url}' > "${k%/k6.jsonl}/meta.json"
+done
+scripts/report.sh
+''')
+          if (rc != 0) { unstable("scripts/report.sh failed (exit ${rc})") }
+        }
+      }
       archiveArtifacts artifacts: 'out/**', allowEmptyArchive: true
     }
   }

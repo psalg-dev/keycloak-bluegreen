@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keycloak blue-green results</title>
+<!-- report/template.html: scripts/report.sh replaces the two marker lines (Chart.js, data JSON). No external URLs. -->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,.10); --shade: rgba(42,120,214,.09);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --goodtext: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.16);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --goodtext: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10); --shade: rgba(57,135,229,.16);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --goodtext: #0ca30c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header, nav, main { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 20px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 0 0 6px; }
+h3 { font-size: 15px; margin: 22px 0 8px; }
+.sub, .note { color: var(--ink2); }
+.note { font-size: 13px; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--axis); margin-top: 14px; }
+nav button { font: inherit; background: none; border: 1px solid transparent; border-bottom: none; color: var(--ink2);
+  padding: 8px 14px; cursor: pointer; border-radius: 6px 6px 0 0; }
+nav button[aria-selected="true"] { background: var(--surface); border-color: var(--axis); color: var(--ink); font-weight: 600;
+  margin-bottom: -1px; }
+nav button:focus-visible { outline: 2px solid var(--s1); }
+main { padding-bottom: 40px; }
+section[role="tabpanel"] { padding-top: 16px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0; }
+.kv dt { color: var(--ink2); } .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink2); font-weight: 600; font-size: 12px; white-space: nowrap; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+code { font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; padding: 1px 7px; font-size: 12px; font-weight: 600;
+  white-space: nowrap; border: 1px solid var(--ring); }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.v-ok { color: var(--goodtext); } .v-ok::before { background: var(--good); }
+.v-expected { color: var(--ink2); } .v-expected::before { background: var(--s1); }
+.v-fail { color: var(--critical); } .v-fail::before { background: var(--critical); }
+.v-warn { color: var(--ink); } .v-warn::before { background: var(--warning); }
+.v-nodata { color: var(--muted); font-weight: 400; } .v-nodata::before { background: transparent; border: 1px dashed var(--muted); }
+.synthetic { border: 2px dashed var(--warning); background: var(--surface); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+.synthetic strong { color: var(--ink); }
+.cell { display: block; padding: 2px 6px; font-size: 12px; text-align: right; white-space: nowrap; border-left: 4px solid transparent; }
+.cell.v-ok { border-left-color: var(--good); } .cell.v-expected { border-left-color: var(--s1); }
+.cell.v-fail { border-left-color: var(--critical); font-weight: 700; } .cell.v-warn { border-left-color: var(--warning); }
+.cell.v-nodata { border-left: 4px dashed var(--muted); }
+.cell::before { display: none; }
+.chart { position: relative; height: 260px; } .chart.small { height: 240px; } .chart.tiny { height: 120px; }
+.strip { position: relative; height: 66px; margin: 8px 0 4px; border-bottom: 1px solid var(--axis); }
+.strip .win { position: absolute; top: 0; bottom: 0; background: var(--shade); }
+.strip .ev { position: absolute; bottom: 0; width: 2px; margin-left: -1px; background: var(--ink2); }
+.strip .ev.major { background: var(--ink); width: 2px; }
+.strip .lbl { position: absolute; font-size: 11px; color: var(--ink2); white-space: nowrap; transform: translateX(-50%); }
+.axisrow { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+select { font: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 4px; padding: 2px 6px; }
+details > summary { cursor: pointer; color: var(--ink2); }
+.legendnote { font-size: 12px; color: var(--ink2); margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Keycloak blue-green: cutover results</h1>
+  <div class="sub" id="gen"></div>
+</header>
+<nav id="tabs" role="tablist" aria-label="Scenarios"></nav>
+<main id="panels"></main>
+<script>
+<!--CHARTJS-->
+</script>
+<script id="data" type="application/json">
+<!--DATA-->
+</script>
+<script>
+'use strict';
+const D = JSON.parse(document.getElementById('data').textContent);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const MODES = D.cases[0].modes.map((m) => m.id);
+const STEPS = ['login_hop', 'token', 'refresh', 'logout', 'reads', 'app_call', 'introspection'];
+const STEP_LABEL = { login_hop: 'login hops', token: 'token (code exchange)', refresh: 'refresh', logout: 'logout + probes',
+  reads: 'reads (discovery, JWKS)', app_call: 'app calls', introspection: 'introspection (testresource)' };
+// error-chart classes: color follows the class, fixed slots; app-side classes fold into one series
+const ERR = [['login_failed', '--s1'], ['refresh_lost_session', '--s2'], ['logout_not_effective', '--s3'],
+  ['refresh_other_error', '--s4'], ['other_4xx', '--s5'], ['app', '--s6'], ['net_error', '--s7'], ['http_5xx', '--s8']];
+const APP_ERR = ['introspection_error', 'introspection_false_inactive', 'jwt_rejected'];
+const MAJOR = new Set(['switch', 'rollback', 'copy_point']);
+const MARK = /^(switch|kill|copy_point|promoted|migration|replay|replay_done|rollback.*|drained|load_stop|recovered)$/;
+const VERDICT = { ok: 'OK', expected: 'expected', fail: 'over bound', warn: 'over bound (not gated)', nodata: 'not measured (no data)' };
+
+const h = (tag, attrs, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null) continue;
+    if (k === 'class') e.className = v; else if (k === 'html') e.innerHTML = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat(Infinity)) if (k != null) e.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return e;
+};
+const num = (v, d = 0) => (v == null ? 'n/a' : Number(v).toLocaleString('en-US', { maximumFractionDigits: d }));
+const pct = (r) => {
+  if (r == null) return 'n/a';
+  const p = r * 100;
+  return (p === 0 ? '0' : p < 0.01 ? '<0.01' : p < 1 ? p.toPrecision(2) : p < 99.95 ? p.toFixed(1) : '100') + ' %';
+};
+const secs = (x) => (x == null ? '' : (x >= 0 ? '+' : '') + num(x, 1) + ' s');
+const badge = (v) => h('span', { class: 'badge v-' + v }, VERDICT[v] || v);
+const gateBadge = (c) => {
+  const g = c.gate.verdict;
+  return g ? h('span', { class: 'badge v-' + (g.v === 'PASS' ? 'ok' : 'fail') }, 'gate ' + g.v + ' (' + g.mode + ')')
+    : h('span', { class: 'badge v-nodata' }, 'gate not run');
+};
+
+// vertical event markers + cutover window shading on every time chart (options.plugins.markers.c = the case)
+Chart.register({
+  id: 'markers',
+  beforeDatasetsDraw(chart, _a, o) {
+    if (!o || !o.c) return;
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    ctx.save(); ctx.fillStyle = css('--shade');
+    for (const [s, e] of o.c.windows) {
+      const x0 = Math.max(a.left, x.getPixelForValue(s)), x1 = Math.min(a.right, x.getPixelForValue(e));
+      if (x1 > x0) ctx.fillRect(x0, a.top, x1 - x0, a.bottom - a.top);
+    }
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart, _a, o) {
+    if (!o || !o.c) return;
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    ctx.save(); ctx.font = '10px system-ui, sans-serif'; ctx.textBaseline = 'top';
+    let lastLabel = -1e9;
+    for (const ev of o.c.events.filter((e) => MARK.test(e.event))) {
+      const px = x.getPixelForValue(ev.x);
+      if (px < a.left || px > a.right) continue;
+      ctx.strokeStyle = MAJOR.has(ev.event) ? css('--ink') : css('--muted');
+      ctx.setLineDash(MAJOR.has(ev.event) ? [] : [3, 3]); ctx.lineWidth = MAJOR.has(ev.event) ? 1.5 : 1;
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      if (o.labels && px - lastLabel > 46) { ctx.fillStyle = css('--ink2'); ctx.fillText(ev.event, px + 3, a.top + 2); lastLabel = px; }
+    }
+    ctx.restore();
+  },
+});
+
+function baseOpts(c, xr, ytitle, extra = {}) {
+  return Object.assign({
+    responsive: true, maintainAspectRatio: false, animation: false, normalized: true,
+    interaction: { mode: 'index', axis: 'x', intersect: false },
+    scales: {
+      x: { type: 'linear', min: xr[0], max: xr[1], title: { display: true, text: 's relative to ' + c.t0.event },
+        grid: { color: css('--grid') }, border: { color: css('--axis') } },
+      y: { beginAtZero: true, title: { display: true, text: ytitle }, grid: { color: css('--grid') }, border: { display: false } },
+    },
+    plugins: { markers: { c, labels: true }, legend: { labels: { boxWidth: 12, boxHeight: 12 } },
+      tooltip: { callbacks: { title: (it) => (it.length ? secs(it[0].parsed.x) : '') } } },
+  }, extra);
+}
+const xs = (s, i, mid) => s.x0 + i * s.B + (mid ? s.B / 2 : 0);
+function xrange(c) {
+  const s = c.series; if (!s) return [0, 1];
+  return [s.x0, s.x0 + s.req.length * s.B];
+}
+
+function renderCase(c, root) {
+  const xr = xrange(c), charts = [];
+  const meta = c.meta || {};
+  root.append(h('h2', {}, c.case + ': ' + c.from + ' → ' + c.to));
+  if (c.synthetic) root.append(h('div', { class: 'synthetic', role: 'note' }, h('strong', {}, '⚠ SYNTHETIC DATA. '), c.synthetic));
+  const head = h('dl', { class: 'kv' },
+    h('dt', {}, 'versions'), h('dd', {}, c.from + ' (provider v' + c.from_provider + ') → ' + c.to + ' (provider v' + c.to_provider + ')'),
+    h('dt', {}, 'mechanism'), h('dd', {}, c.mechanism + (c.mechanism.startsWith('shared') ? ' (one shared DB)' : ' (own DB per color, lossy overlap)')),
+    h('dt', {}, 'run'), h('dd', {}, (c.run.start || '?') + ' .. ' + (c.run.end || '?') + ' (' + num(c.run.seconds) + ' s)'),
+    h('dt', {}, 't = 0'), h('dd', {}, c.t0.event + ' at ' + c.t0.t),
+    h('dt', {}, 'build / commit'), h('dd', {}, meta.build ? h('span', {}, '#' + meta.build + ' ', meta.commit ? h('code', {}, String(meta.commit).slice(0, 10)) : '',
+      meta.url ? ' (' + meta.url + ')' : '') : 'n/a'),
+    h('dt', {}, 'k6 lines'), h('dd', {}, num(c.run.lines) + ' judged, ' + num(c.run.aborted) + ' aborted by the k6 stop (excluded, like the gate)'),
+    h('dt', {}, 'gate'), h('dd', {}, gateBadge(c)));
+  const rules = c.gate.rules.length ? h('details', {}, h('summary', {}, 'gate rules (' + c.gate.rules.length + ')'),
+    h('div', { class: 'scroll' }, h('table', {}, h('tr', {}, h('th', {}, 'rule'), h('th', {}, 'state'), h('th', {}, 'detail')),
+      c.gate.rules.map((r) => h('tr', {}, h('td', {}, h('code', {}, r.rule)),
+        h('td', {}, h('span', { class: 'badge v-' + ({ PASS: 'ok', FAIL: 'fail', SKIP: 'nodata', INFO: 'expected' })[r.state] }, r.state)),
+        h('td', {}, r.detail)))))) : null;
+  root.append(h('div', { class: 'grid2' }, h('div', { class: 'card' }, head, rules),
+    h('div', { class: 'card' }, h('dl', { class: 'kv' }, c.numbers.map((n) => [h('dt', {}, n.k), h('dd', {}, n.v)])))));
+
+  // event timeline strip
+  const span = xr[1] - xr[0] || 1, pos = (x) => Math.min(100, Math.max(0, ((x - xr[0]) / span) * 100)) + '%';
+  const strip = h('div', { class: 'strip', role: 'img', 'aria-label': 'event timeline' });
+  for (const [s, e] of c.windows) strip.append(h('div', { class: 'win', style: 'left:' + pos(s) + ';width:calc(' + pos(e) + ' - ' + pos(s) + ')', title: 'cutover window ' + secs(s) + ' .. ' + secs(e) }));
+  let row = 0, lastX = -1e9;
+  for (const ev of c.events) {
+    strip.append(h('div', { class: 'ev' + (MAJOR.has(ev.event) ? ' major' : ''), style: 'left:' + pos(ev.x) + ';height:' + (MAJOR.has(ev.event) ? 40 : 22) + 'px', title: ev.event + ' ' + secs(ev.x) + ' ' + ev.d }));
+    const p = parseFloat(pos(ev.x)); row = p - lastX < 9 ? (row + 1) % 3 : 0; lastX = p;
+    strip.append(h('div', { class: 'lbl', style: 'left:' + pos(ev.x) + ';top:' + row * 14 + 'px' }, ev.event));
+  }
+  root.append(h('h3', {}, 'Event timeline'), h('div', { class: 'card' }, strip,
+    h('div', { class: 'axisrow' }, h('span', {}, secs(xr[0])), h('span', {}, 'shaded: cutover window(s)'), h('span', {}, secs(xr[1]))),
+    h('details', {}, h('summary', {}, 'events (' + c.events.length + ')'), h('div', { class: 'scroll' }, h('table', {},
+      h('tr', {}, h('th', { class: 'num' }, 't'), h('th', {}, 'event'), h('th', {}, 'detail')),
+      c.events.map((e) => h('tr', {}, h('td', { class: 'num' }, secs(e.x)), h('td', {}, h('code', {}, e.event)), h('td', {}, e.d))))))));
+
+  // failure modes
+  root.append(h('h3', {}, 'Failure modes'),
+    h('div', { class: 'card scroll' }, h('table', {},
+      h('tr', {}, ['mode', 'count', 'attempts', 'rate', 'pre / cutover / post', 'first', 'last', 'expected (' + c.mechanism + ')', 'unexpected', 'enforced by', 'verdict']
+        .map((t, i) => h('th', { class: [1, 2, 3, 5, 6, 8].includes(i) ? 'num' : null }, t))),
+      c.modes.map((m) => m.verdict === 'nodata'
+        ? h('tr', {}, h('td', {}, h('code', {}, m.id)), h('td', { colspan: 6, class: 'note' }, 'not measured (no data)'),
+          h('td', {}, m.expected), h('td', {}), h('td', {}, m.gate), h('td', {}, badge('nodata')))
+        : h('tr', {}, h('td', {}, h('code', {}, m.id), m.note ? h('div', { class: 'note' }, m.note) : null),
+          h('td', { class: 'num' }, num(m.count)), h('td', { class: 'num' }, num(m.attempts)), h('td', { class: 'num' }, pct(m.rate)),
+          h('td', {}, m.phases.pre + ' / ' + m.phases.cut + ' / ' + m.phases.post),
+          h('td', { class: 'num' }, secs(m.first)), h('td', { class: 'num' }, secs(m.last)), h('td', {}, m.expected),
+          h('td', { class: 'num' }, num(m.unexpected)), h('td', {}, m.gate), h('td', {}, badge(m.verdict))))),
+      h('p', { class: 'note' }, 'first/last: seconds relative to ' + c.t0.event + '. pre / cutover / post: occurrences before, inside, after the shaded window(s). "unexpected" = occurrences outside what this mechanism is expected to lose.')));
+
+  // rates
+  const s = c.series;
+  const reqCv = h('canvas'), errCv = h('canvas');
+  root.append(h('h3', {}, 'Requests and errors over time (' + (s ? s.B : '?') + ' s buckets)'),
+    h('div', { class: 'card' }, h('div', { class: 'chart tiny' }, reqCv), h('div', { class: 'chart' }, errCv),
+      h('p', { class: 'legendnote' }, 'Errors per second by failure class, stacked. "app" = introspection_error + introspection_false_inactive + jwt_rejected (testclient/testresource lines). other_4xx = 4xx outside the failure modes (e.g. app calls).')));
+  if (s) {
+    charts.push(() => new Chart(reqCv, { type: 'line', data: { datasets: [{ label: 'requests/s', data: s.req.map((y, i) => ({ x: xs(s, i, true), y })),
+      borderColor: css('--ink2'), borderWidth: 1.5, pointRadius: 0, pointHitRadius: 6 }] },
+      options: (() => {
+        const o = baseOpts(c, xr, 'requests/s');
+        o.scales.x.title.display = false; o.plugins.legend = { display: false }; o.plugins.markers.labels = false;
+        return o;
+      })() }));
+    const errs = ERR.map(([k, col]) => {
+      const keys = k === 'app' ? APP_ERR : [k];
+      const ys = s.req.map((_, i) => keys.reduce((t, kk) => t + ((s.err[kk] || [])[i] || 0), 0));
+      return ys.some((y) => y > 0) ? { type: 'bar', label: k, data: ys.map((y, i) => ({ x: xs(s, i, true), y })), backgroundColor: css(col),
+        borderColor: css('--surface'), borderWidth: { top: 1, left: 0, right: 0, bottom: 0 }, barPercentage: 1, categoryPercentage: 1, stack: 'e' } : null;
+    }).filter(Boolean);
+    charts.push(() => {
+      const o = baseOpts(c, xr, 'errors/s');
+      o.scales.x.stacked = true; o.scales.y.stacked = true;
+      if (!errs.length) o.plugins.title = { display: true, text: 'no errors in this run', color: css('--goodtext') };
+      return new Chart(errCv, { type: 'bar', data: { datasets: errs }, options: o });
+    });
+  }
+
+  // latency over time
+  const lat = c.latency;
+  if (lat) {
+    const present = STEPS.filter((k) => lat.cls[k]);
+    const sel = h('select', { 'aria-label': 'step class' }, present.map((k) => h('option', { value: k }, STEP_LABEL[k])));
+    const cv = h('canvas');
+    root.append(h('h3', {}, 'Latency over time (' + lat.B + ' s buckets) ', sel), h('div', { class: 'card' }, h('div', { class: 'chart' }, cv),
+      h('p', { class: 'legendnote' }, 'p50 / p95 / p99 of request duration (t_end - t_start) per bucket, log scale. Gaps = no request of that class in the bucket.')));
+    let ch;
+    const ds = (k) => ['p50', 'p95', 'p99'].map((p, j) => ({ label: p, data: lat.cls[k][p].map((y, i) => ({ x: xs(lat, i, true), y })),
+      borderColor: css(['--s1', '--s2', '--s3'][j]), backgroundColor: css(['--s1', '--s2', '--s3'][j]), borderWidth: 2, pointRadius: 0, pointHitRadius: 6, spanGaps: false }));
+    charts.push(() => {
+      const o = baseOpts(c, xr, 'ms (log)');
+      o.scales.y = { type: 'logarithmic', title: { display: true, text: 'ms (log)' }, grid: { color: css('--grid') }, border: { display: false } };
+      ch = new Chart(cv, { type: 'line', data: { datasets: ds(sel.value) }, options: o });
+      sel.addEventListener('change', () => { ch.data.datasets = ds(sel.value); ch.update(); });
+    });
+  }
+
+  // latency distributions: CDF per step class, pre vs cutover vs post (same windows as the shading)
+  const W = [['pre', 'pre-switch', '--s1'], ['cut', 'cutover window', '--s2'], ['post', 'post-switch', '--s3']];
+  const dist = STEPS.filter((k) => c.dist[k]);
+  if (dist.length) {
+    const grid = h('div', { class: 'grid3' });
+    const tbl = h('table', {}, h('tr', {}, h('th', {}, 'step class'), h('th', {}, 'window'), ['n', 'p50', 'p90', 'p95', 'p99', 'max'].map((t) => h('th', { class: 'num' }, t + (t === 'n' ? '' : ' ms')))));
+    for (const k of dist) {
+      const cv = h('canvas');
+      grid.append(h('div', {}, h('div', { class: 'note' }, STEP_LABEL[k]), h('div', { class: 'chart small' }, cv)));
+      for (const [w, wl] of W) {
+        const st = c.dist[k][w];
+        if (st) tbl.append(h('tr', {}, h('td', {}, STEP_LABEL[k]), h('td', {}, wl), ['n', 'p50', 'p90', 'p95', 'p99', 'max'].map((f) => h('td', { class: 'num' }, num(st[f], 1)))));
+      }
+      charts.push(() => new Chart(cv, { type: 'line', data: { datasets: W.filter(([w]) => c.dist[k][w]).map(([w, wl, col]) => {
+        const b = c.dist[k][w].bins, idx = Object.keys(b).map(Number).sort((p, q) => p - q), n = c.dist[k][w].n;
+        let acc = 0;
+        return { label: wl + ' (n=' + n + ')', data: idx.map((i) => { acc += b[i]; return { x: Math.pow(10, (i + 1) / 10), y: acc / n }; }),
+          borderColor: css(col), backgroundColor: css(col), borderWidth: 2, pointRadius: 0, pointHitRadius: 6, stepped: 'before' };
+      }) }, options: { responsive: true, maintainAspectRatio: false, animation: false,
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        scales: { x: { type: 'logarithmic', title: { display: true, text: 'ms (log)' }, grid: { color: css('--grid') } },
+          y: { min: 0, max: 1, title: { display: true, text: 'fraction ≤ x' }, grid: { color: css('--grid') } } },
+        plugins: { legend: { labels: { boxWidth: 10, boxHeight: 10, font: { size: 11 } } },
+          tooltip: { callbacks: { title: (it) => (it.length ? '≤ ' + num(it[0].parsed.x, 1) + ' ms' : ''), label: (it) => it.dataset.label + ': ' + pct(it.parsed.y) } } } } }));
+    }
+    root.append(h('h3', {}, 'Latency distribution: pre-switch vs cutover window vs post-switch'),
+      h('div', { class: 'card' }, grid, h('p', { class: 'legendnote' }, 'Cumulative distribution of request duration (10 bins per decade). A curve further right = slower. Windows: pre = before the first cutover window, cutover = inside the shaded window(s), post = after.'),
+        h('details', {}, h('summary', {}, 'percentile table'), h('div', { class: 'scroll' }, tbl))));
+  }
+  return charts;
+}
+
+function renderOverview(root) {
+  root.append(h('h2', {}, 'Overview'),
+    h('div', { class: 'card note' }, h('strong', {}, 'How to read this. '),
+      'Each tab is one demo case run under load (k6: brokered logins, refreshes every 5 s, logouts with probes, discovery/JWKS reads). ',
+      'Time is in seconds relative to the switch; the shaded band is the cutover window (shared: switch .. pod recovered; lossy: copy_point .. window_end; rollback: rollback_start .. rollback end). ',
+      'Each failure mode (ids from docs/test-apps-contract.md, specified in docs/failure-modes.md) is counted against its attempts and judged against what the case\'s mechanism is ',
+      h('em', {}, 'expected'), ' to lose: "expected" = losses inside the bound (e.g. lossy sessions born in [copy_point, switch]), "over bound" = occurrences outside it. ',
+      '"not measured (no data)" means the source lines are missing (e.g. the test apps), never zero. The gate verdict comes from gate.txt; some modes are only reported, not gated. ',
+      'Tabs marked SYNTHETIC hold generated data, not measurements.'));
+  const cs = D.cases;
+  root.append(h('h3', {}, 'Headline numbers'), h('div', { class: 'card scroll' }, h('table', {},
+    h('tr', {}, ['case', 'mechanism', 'gate', 'requests', 'error rate', 'cutover error rate', 'p95 pre-switch', 'p95 cutover', 'p95 post'].map((t, i) => h('th', { class: i > 2 ? 'num' : null }, t))),
+    cs.map((c) => h('tr', {}, h('td', {}, h('a', { href: '#' + c.case }, c.case), c.synthetic ? h('div', {}, h('span', { class: 'badge v-warn' }, 'SYNTHETIC')) : null),
+      h('td', {}, c.mechanism), h('td', {}, gateBadge(c)), h('td', { class: 'num' }, num(c.headline.requests)),
+      h('td', { class: 'num' }, pct(c.headline.error_rate) + ' (' + num(c.headline.errors) + ')'),
+      h('td', { class: 'num' }, pct(c.headline.cut_error_rate) + ' (' + num(c.headline.cut_errors) + ' / ' + num(c.headline.cut_requests) + ')'),
+      h('td', { class: 'num' }, num(c.headline.p95_pre, 1) + ' ms'), h('td', { class: 'num' }, num(c.headline.p95_cut, 1) + ' ms'), h('td', { class: 'num' }, num(c.headline.p95_post, 1) + ' ms')))),
+    h('p', { class: 'note' }, 'Error = any k6 line in a failure class (5xx, status 0, failed login hop, refresh failure, logged-out session refreshed, other 4xx). p95 over all k6 requests of the window.')));
+  root.append(h('h3', {}, 'Failure modes × scenarios'), h('div', { class: 'card scroll' }, h('table', {},
+    h('tr', {}, h('th', {}, 'failure mode'), cs.map((c) => h('th', { class: 'num' }, c.case + (c.synthetic ? ' *' : '')))),
+    MODES.map((id) => h('tr', {}, h('td', {}, h('code', {}, id)), cs.map((c) => {
+      const m = c.modes.find((x) => x.id === id);
+      return h('td', {}, h('span', { class: 'cell v-' + m.verdict, title: VERDICT[m.verdict] + ': ' + m.count + ' of ' + m.attempts + '; expected ' + m.expected + '; ' + m.gate },
+        m.verdict === 'nodata' ? 'no data' : pct(m.rate) + (m.count ? ' (' + num(m.count) + ')' : '')));
+    })))),
+    h('p', { class: 'note' }, 'Cell = rate (count). Left bar: ', badge('ok'), ' ', badge('expected'), ' ', badge('warn'), ' ', badge('fail'), ' ', badge('nodata'),
+      cs.some((c) => c.synthetic) ? ' * = SYNTHETIC data.' : '')));
+}
+
+document.getElementById('gen').textContent = 'Generated ' + D.generated + ' from ' + D.cases.length + ' case(s): ' + D.cases.map((c) => c.case).join(', ');
+const tabs = document.getElementById('tabs'), panels = document.getElementById('panels');
+const pending = {};
+const views = [['overview', 'Overview', null]].concat(D.cases.map((c) => [c.case, c.case + (c.synthetic ? ' (synthetic)' : ''), c]));
+for (const [id, label, c] of views) {
+  const panel = h('section', { role: 'tabpanel', id: 'p-' + id, 'aria-labelledby': 't-' + id, hidden: '' });
+  if (c) pending[id] = renderCase(c, panel); else renderOverview(panel);
+  panels.append(panel);
+  tabs.append(h('button', { role: 'tab', id: 't-' + id, 'aria-controls': 'p-' + id, 'aria-selected': 'false', 'data-id': id }, label));
+}
+function show(id) {
+  if (!views.some((v) => v[0] === id)) id = 'overview';
+  for (const b of tabs.children) b.setAttribute('aria-selected', String(b.dataset.id === id));
+  for (const p of panels.children) p.hidden = p.id !== 'p-' + id;
+  // charts are built on first view: a canvas inside a hidden panel has no size
+  if (pending[id]) { pending[id].forEach((f) => f()); delete pending[id]; }
+}
+Chart.defaults.color = css('--ink2'); Chart.defaults.borderColor = css('--grid');
+Chart.defaults.font.family = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+tabs.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) location.hash = b.dataset.id; });
+window.addEventListener('hashchange', () => show(location.hash.slice(1)));
+show(location.hash.slice(1));
+</script>
+</body>
+</html>
