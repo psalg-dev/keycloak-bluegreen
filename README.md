@@ -42,7 +42,7 @@ each in `minor`/`major` (green gets a replica of blue's, promoted at the copy po
 
 ## Run it
 
-Requirements: Docker with about 16 GB for the containers (measured peak 13.6 GiB, see Results; the laptop profile
+Requirements: Docker with about 16 GB for the containers (measured peak 14.8 GiB, see Results; the laptop profile
 below fits 10 GB), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
@@ -95,7 +95,7 @@ logins/s, 3 app VUs), 2 ingress-nginx workers. Same images, config stages, switc
 
 Measured over all five cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with Jenkins
 (rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The default profile peaks at
-12.6 GiB / 13.6 GiB (Results). So give Docker Desktop / WSL2 about 10 GB (`.wslconfig`: `memory=10GB`), or skip Jenkins and use the
+13.8 GiB / 14.8 GiB (Results). So give Docker Desktop / WSL2 about 10 GB (`.wslconfig`: `memory=10GB`), or skip Jenkins and use the
 launcher. Not shown on the laptop profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (here 1),
 the production PDB of 2 out of 3. Latency numbers are comparable within a run, not across profiles.
 
@@ -113,43 +113,42 @@ the production PDB of 2 out of 3. Latency numbers are comparable within a run, n
 
 ## Results
 
-Final run: Jenkins builds #33-#37, default profile, one fresh cluster, commit `f3d94e3` (latency rows re-judged with
-`461bb41`, which unified the gate's and the report's cutover windows; no verdict changed). Load throughout: 2 brokered logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 3 app VUs through the two test apps.
-Every gate PASSes.
+Final run: Jenkins builds #44-#48 at commit `4743cf1`, default profile, one cluster, five cases back to back. Load
+throughout: 2 brokered logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 3 app VUs through the
+two test apps - about 12 000-31 000 k6 requests per case. Every gate PASSes.
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
 |---|---|---|---|---|---|
-| k6 requests | 29,030 | 32,183 | 53,345 | 69,243 | 56,739 |
+| k6 requests | 12,639 | 15,012 | 23,451 | 30,730 | 21,231 |
 | 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
-| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.20 % (0.70 %) | 0.30 % (0.91 %) | 0.21 % (0.85 %) |
-| lossy window (copy point -> switch) | - | - | 115.2 s | 111.6 s | 112.6 s |
-| sessions lost = silent re-logins | 0 | 0 | 4 | 9 (+2 green-born, at the rollback) | 5 |
-| logouts / new users replayed | - | - | 21 / 82 | 19 / 84 forward, 30 / 90 back | 21 / 68 |
-| users repaired (post-flip race) | - | - | 0 | 1 | 0 |
-| resurrection window (switch -> replay done) | - | - | 49.3 s | 49.9 s, rollback 50.4 s | 46.5 s |
-| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.3 s | 43.5 s | - | - | - |
-| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 62.6 s (reverse replay) | - |
-| p95 latency pre / cutover / post | 57 / 70 / 61 ms | 68 / 76 / 72 ms | 81 / 96 / 93 ms | 105 / 119 / 121 ms | 141 / 155 / 152 ms |
-| step classes with cutover p95 > 2x | refresh 6.2x, introspection 3.4x, logout 2.2x, app calls 2.1x | introspection 2.8x | none | none | none |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.23 % (0.66 %) | 0.24 % (0.78 %) | 0.19 % (0.72 %) |
+| lossy window (copy point -> switch) | - | - | 106.2 s | 105.3 s | 107.7 s |
+| sessions lost = silent re-logins | 0 | 0 | 3 | 14 (+7 green-born, at the rollback) | 9 |
+| logouts / new users replayed | - | - | 15 / 47 | 16 / 38 forward, 19 / 66 back | 15 / 47 |
+| users repaired (post-flip race) | - | - | 0 | 0 | 3 |
+| resurrection window (switch -> replay done) | - | - | 39.9 s | 37.0 s, rollback 43.8 s | 38.7 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.3 s | 43.8 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 36.5 s (reverse replay) | - |
+| p95 network latency pre / cutover / post | 161 / 170 / 142 ms | 174 / 164 / 146 ms | 159 / 162 / 143 ms | 164 / 155 / 143 ms | 160 / 158 / 144 ms |
+| step classes with cutover p95 > 2x | introspection 3.05x | none | none | none | none |
 | schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
 
 Reading it:
 
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
-  the flip (started on blue, finished on green: 29 in `minor`, 69 in `minor-rollback`, 42 in `major`; the next attempt goes
-  through legacy SSO), refreshes of sessions born in the lossy window (`invalid_grant`, then a silent re-login), and the
-  apps' back-/front-channel logouts for those sessions (Keycloak on green never knew them). No session born before the
-  copy point was lost, no logged-out session came back after the replay. One user in `minor-rollback` got a second
-  `sub` in the post-flip race; the replay repaired it (first `sub` restored), the gate excuses exactly that one.
-- The shared cases (same DB) lose nothing. Their slower classes fall in a cutover window that also holds a pod kill
-  (3 -> 2 pods for ~45 s): refresh p95 22 -> 137 ms in `patch`, far below any client timeout. `patch-rollback`, same
-  mechanism and pod kill, has only introspection over 2x (2.8x; refresh 1.5x): one machine, so expect run-to-run
-  spread of that size.
-- Admin and account console answer 503 from the copy point to the window end: 164-169 s per lossy switch, 112 s for
-  the lossy rollback. Login, token, refresh, logout, discovery and JWKS never stop.
-- Memory, default profile (`scripts/mem-sample.sh`, 262 samples, ~20 s apart, over all five cases): **12.6 GiB** peak for the four
-  KinD nodes, **13.6 GiB** with Jenkins, during the `major` switch (both colors, both Postgres clusters, green
-  migrating). Keycloak pod max 1.3 GiB, Postgres instance max 352 MiB.
+  the flip (started on blue, finished on green; the next attempt goes through legacy SSO), refreshes of sessions born
+  in the lossy window (`invalid_grant`, then a silent re-login), and the apps' back-/front-channel logouts for those
+  sessions (Keycloak on green never knew them). No session born before the copy point was lost, no logged-out session
+  came back after the replay. In `major` three people were created twice in the post-flip race; the replay repaired
+  them (first `sub` restored) and the gate excuses exactly those three.
+- The shared cases (same DB) lose nothing. `patch` has one class over 2x, introspection 3.05x, inside a cutover
+  window that also holds a pod kill (3 -> 2 pods for ~43 s); `patch-rollback`, same mechanism, has none. One run per
+  case on one machine: expect run-to-run spread of that size.
+- Admin and account console answer 503 for the whole cutover window in the lossy cases (copy point -> window end,
+  ~150 s). Login, token, refresh, logout, discovery and JWKS never stop.
+- Memory, default profile (`scripts/mem-sample.sh`, ~15 s apart, over all five cases): **13.8 GiB** peak for the four
+  KinD nodes, **14.8 GiB** with Jenkins, during the `major` switch (both colors, both Postgres clusters, green
+  migrating). Keycloak pod max 1.2 GiB, Postgres instance max 524 MiB.
 
 The full numbers, per failure mode and per step class, are in the report (one tab per case).
 
