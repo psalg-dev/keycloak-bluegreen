@@ -73,16 +73,20 @@ run_body() {
     install) first_install "$from" "$fp" pg-1 ;;
     warmup) scripts/load.sh start; wait_progress "${WARMUP_SECONDS:-120}" warm-up ;;
     switch)
+      progress_ticker switch & local ticker=$! # k6 keeps running through the cutover; show it
       case $mech in
         shared) scripts/switch-shared.sh "$to" "$tp" ;;
         lossy) scripts/switch-lossy.sh "$to" ;;
         shared-rollback) KEEP_OLD=true scripts/switch-shared.sh "$to" "$tp" ;;
         lossy-rollback) KEEP_OLD=true scripts/switch-lossy.sh "$to" ;;
-      esac ;;
+      esac
+      kill "$ticker" 2>/dev/null || true ;;
     rollback)
       [[ $mech == *-rollback ]] || { log "not a rollback case: nothing to do"; return; }
       wait_progress "${SOAK_SECONDS:-90}" soak # sessions and logouts happen on the new color, so the rollback has something to lose
-      REASON=drill scripts/rollback.sh ;;
+      progress_ticker rollback & local ticker=$!
+      REASON=drill scripts/rollback.sh
+      kill "$ticker" 2>/dev/null || true ;;
     cooldown)
       wait_progress "${COOLDOWN_SECONDS:-90}" cool-down # lossy: probes must run well after replay_done
       scripts/load.sh stop

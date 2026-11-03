@@ -206,19 +206,29 @@ delete_dbs() {
   die "old CNPG pods/PVCs/secrets still present"
 }
 
-# wait_progress <seconds> <label>: sleep, but log every 30 s what the load generator sees so far
-# (requests, 5xx/status 0, refresh invalid_grant, logins, logged-out sessions that still refresh). Silent sleeps make a live run look dead.
+# k6_status: one line of what the load generator has seen so far (requests, 5xx/status 0, refresh invalid_grant,
+# logins, logged-out sessions that still refresh), or "k6 not running"
+k6_status() {
+  local p; p=$(kubectl -n load get pod -l job-name=k6 -o name 2>/dev/null | head -1)
+  [[ -n $p ]] || { echo "k6 not running"; return; }
+  kubectl -n load exec "$p" -- cat /out/k6.log 2>/dev/null \
+    | jq -rRs '[split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
+      | "k6: \(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant" and .step == "refresh")) | length) refresh invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins, \(map(select(.step == "logout_probe" and .status == 200)) | length) logged-out refreshes"'
+}
+
+# wait_progress <seconds> <label>: sleep, but log k6_status every 30 s. Silent sleeps make a live run look dead.
 wait_progress() {
-  local total=$1 label=$2 waited=0 step p TAG="load test"
+  local total=$1 label=$2 waited=0 step TAG="load test"
   while ((waited < total)); do
     step=$((total - waited < 30 ? total - waited : 30)); sleep "$step"; waited=$((waited + step))
-    p=$(kubectl -n load get pod -l job-name=k6 -o name 2>/dev/null | head -1)
-    if [[ -n $p ]]; then
-      log "$label ${waited}/${total}s | k6: $(kubectl -n load exec "$p" -- cat /out/k6.log 2>/dev/null \
-        | jq -rRs '[split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
-          | "\(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant" and .step == "refresh")) | length) refresh invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins, \(map(select(.step == "logout_probe" and .status == 200)) | length) logged-out refreshes"')"
-    else
-      log "$label ${waited}/${total}s"
-    fi
+    log "$label ${waited}/${total}s | $(k6_status)"
   done
+}
+
+# progress_ticker <label>: background k6_status every 30 s while a switch/rollback runs (the load never pauses;
+# this makes that visible). Start with `progress_ticker x & t=$!`, stop with `kill $t`.
+progress_ticker() {
+  local TAG="load test" s=0
+  trap - ERR
+  while sleep 30; do s=$((s + 30)); log "$1 +${s}s, load still running | $(k6_status)"; done
 }
