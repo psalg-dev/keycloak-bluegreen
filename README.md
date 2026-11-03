@@ -77,6 +77,22 @@ Without Jenkins: `docker compose run --rm launcher bash scripts/demo.sh minor` (
 `demo.sh minor switch`). Results land in `out/<case>/`: `k6.jsonl`, `apps.jsonl`, `events.jsonl`, `gate.txt`, the
 Keycloak logs of each color, and `bash scripts/report.sh` writes `out/report.html`.
 
+### Live demo, for an audience
+
+One case, in a browser tab: a page that runs a real user journey every 2.5 s - brokered login through the legacy IdP
+(authorization code + PKCE), a JWT-validated API call, a server-side introspection at the resource server, a refresh,
+and a logout that must end the session - and reports every step as it happens.
+
+```bash
+bash scripts/live-demo.sh        # -> http://127.0.0.1:8098/
+```
+
+Flip the active color in another terminal while it runs (`docker compose run --rm launcher bash scripts/demo.sh patch
+switch`, or a Jenkins build) and the page keeps counting through it: login, refresh and logout stay green,
+introspection keeps answering `active: true`, and the latency bars show the cutover. The header links to the
+pre-generated report (`out/report.html`, all five cases) so the detailed numbers are one click away. Needs Node >= 18
+on the host; the client secret, the legacy user password and the CA come from the running cluster.
+
 Admin console: <https://kc-net1.localtest.me/keycloak/admin> (trust `out/certs/ca.crt`; user `temp-admin`, password:
 `kubectl -n keycloak get secret kc-bootstrap-admin -o jsonpath='{.data.password}' | base64 -d`).
 
