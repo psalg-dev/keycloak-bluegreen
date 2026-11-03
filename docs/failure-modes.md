@@ -16,13 +16,13 @@ cool down 90 s, stop the load, gate (`scripts/demo.sh`).
 
 | k6 scenario | rate | what it does |
 |---|---|---|
-| `login` | 18 logins/s (constant arrival) | full brokered auth-code flow, every hop logged: KC `/auth` -> legacy IdP authorize -> legacy login form (think time 0-20 s) -> POST -> KC broker endpoint -> (first-broker-login form) -> code -> `/token`. 80 % users 1-4000 (pre-linked), 20 % 4001-5000 (created on first login). Each session sticks to net1 or net2. |
-| `refresh` | 36 VUs, one refresh every 5 s | holds a session and refreshes it; on `invalid_grant` a silent re-login (`relogin`) through the legacy IdP's SSO. Half the VUs start a new session every 60 s, so sessions are born on every color. |
-| `logout` | 14 VUs, one logout per VU every ~45 s | login, RP-initiated logout (`id_token_hint`, following the brokered round trip), then probes the logged-out refresh token every 5 s until the end (`logout_probe`, must get `invalid_grant`). |
+| `login` | 2 logins/s (constant arrival) | full brokered auth-code flow, every hop logged: KC `/auth` -> legacy IdP authorize -> legacy login form (think time 0-20 s) -> POST -> KC broker endpoint -> (first-broker-login form) -> code -> `/token`. 80 % users 1-4000 (pre-linked), 20 % 4001-5000 (created on first login). Each session sticks to net1 or net2. |
+| `refresh` | 10 VUs, one refresh every 5 s | holds a session and refreshes it; on `invalid_grant` a silent re-login (`relogin`) through the legacy IdP's SSO. Half the VUs start a new session every 60 s, so sessions are born on every color. |
+| `logout` | 4 VUs, one logout per VU every ~45 s | login, RP-initiated logout (`id_token_hint`, following the brokered round trip), then probes the logged-out refresh token every 5 s until the end (`logout_probe`, must get `invalid_grant`). |
 | `reads` | 1/s per network | discovery + JWKS. |
-| `app` | 22 VUs | browser login through the test client app, `/call/jwt` and `/call/introspect` every 5 s for 30-120 s, then a logout with back- or front-channel delivery: half `initiator: app` (POST /logout at the app, which ends its own session first), half `initiator: kc` (the browser logs out at Keycloak's end_session directly while the app holds its session: only the channel call can end it). |
+| `app` | 3 VUs | browser login through the test client app, `/call/jwt` and `/call/introspect` every 5 s for 30-120 s, then a logout with back- or front-channel delivery: half `initiator: app` (POST /logout at the app, which ends its own session first), half `initiator: kc` (the browser logs out at Keycloak's end_session directly while the app holds its session: only the channel call can end it). |
 
-Roughly 240-260 k6 requests/s, 100 000-250 000 lines per case. Every request is one JSON line (schema at the top of
+Roughly 25-30 k6 requests/s, 10 000-20 000 lines per case. Every request is one JSON line (schema at the top of
 `flows.js`); the switch scripts write one JSON line per step to `events.jsonl` (`event` in `scripts/lib/kc.sh`). The
 test apps (once built) log one JSON line per login/call/refresh/logout/introspection to `apps.jsonl`
 (`docs/test-apps-contract.md`). Nothing else is measured: no server-side metrics, no edge logs.
@@ -56,9 +56,9 @@ SIGINT, not server behaviour; they are counted ("aborted") and judged by no rule
 the end of the data (no failed hop, no token, last hop < 30 s before the end) are not judged.
 
 **Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, CNPG Postgres in-cluster;
-`PROFILE=laptop`: 2 workers, 2 pods per color, 2 Postgres instances, ~6 logins/s): k6, both
+`PROFILE=laptop`: 2 workers, 2 pods per color, 2 Postgres instances, ~2 logins/s): k6, both
 colors, Postgres and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
-absolute capacity numbers. Synthetic load at a fixed, modest rate (~18 logins/s): rare races need far more traffic to
+absolute capacity numbers. Synthetic load at a fixed, modest rate (~2 logins/s): rare races need far more traffic to
 show up. One run per case: a count of 0 is "not seen in this run", not a probability; compare rates across runs before
 calling something fixed. No real network between zones, no cloud load balancer: the flip is a Service selector change
 seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results); report tabs built
@@ -145,7 +145,7 @@ that every rule a mode names has the same state as the gate.txt row, and that ov
   or not in the new color's DB (lossy). This is the mode the shared-DB mechanism exists to remove.
 - **Expected**: shared 0; lossy only logins started after `copy_point` (or straddling the rollback).
 - **Enforced**: gate `inflight_login` (+ `inflight_login_rollback`) on the shared path; report only on lossy.
-- **Blind spots**: ~180 straddling logins per flip at 18 logins/s; a rare race needs more. Report and gate count the
+- **Blind spots**: ~20 straddling logins per flip at 2 logins/s; a rare race needs more. Report and gate count the
   same set (since 2026-11-03; before, the report left out logins cut off by the k6 stop: 53 vs 54 in build #6).
 
 ### `refresh_lost_session`

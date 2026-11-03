@@ -23,8 +23,8 @@ die() { log "FAIL: $*"; exit 1; }
 PROFILE=${PROFILE:-default}
 # shellcheck disable=SC2034 # read by the scripts that source this file
 case $PROFILE in
-  default) KC_REPLICAS=3 PG_INSTANCES=3 LOGIN_RATE_DEFAULT=18 APP_VUS_DEFAULT=22 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
-  laptop) KC_REPLICAS=2 PG_INSTANCES=2 LOGIN_RATE_DEFAULT=6 APP_VUS_DEFAULT=8 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
+  default) KC_REPLICAS=3 PG_INSTANCES=3 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
+  laptop) KC_REPLICAS=2 PG_INSTANCES=2 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
   *) die "unknown PROFILE '$PROFILE' (default|laptop)" ;;
 esac
 

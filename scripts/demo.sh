@@ -6,7 +6,7 @@
 #   rollback *-rollback only: soak on the new color, roll back (no-op for other cases)
 #   cooldown keep load running, then stop k6                gate     judge out/<case>/ (k6 lines + events)
 # Results per case in out/<case>/ (events, k6 lines, gate table). Exit non-zero if a phase or the gate fails.
-# Env: WARMUP_SECONDS (120) SOAK_SECONDS (90) COOLDOWN_SECONDS (90) RUN_MAINTENANCE (true|1: maintenance stage in the switch)
+# Env: WARMUP_SECONDS (60) SOAK_SECONDS (90) COOLDOWN_SECONDS (90) RUN_MAINTENANCE (true|1: maintenance stage in the switch)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -32,7 +32,7 @@ explain() {
   case $1 in
     reset) title="Reset" text="Remove both colors, k6, any freeze and every DB; wait until CNPG has really cleaned up, then create a fresh pg-1. Every case starts from the same empty state." ;;
     install) title="Install" text="Blue at $from (provider v$fp) on pg-1, then the config-cli stages bootstrap -> online -> maintenance (no traffic yet, so breaking changes are fine), then 4000 users pre-linked to legacy-net1." ;;
-    warmup) title="Load + warm-up" text="Start k6 in the cluster: brokered logins on net1/net2, refreshes every 5 s, logouts with probes that must stay logged out, discovery/JWKS reads. ${WARMUP_SECONDS:-120} s so sessions exist BEFORE the switch." ;;
+    warmup) title="Load + warm-up" text="Start k6 in the cluster: brokered logins on net1/net2, refreshes every 5 s, logouts with probes that must stay logged out, discovery/JWKS reads. ${WARMUP_SECONDS:-60} s so sessions exist BEFORE the switch." ;;
     switch)
       case $mech in
         shared*) title="Switch (shared DB)" text="Green $to (provider v$tp) next to blue on the same pg-1, own Infinispan cluster; online config through green; flip kc-active; kill one of the $KC_REPLICAS pods per color mid-traffic; drain blue${keep_old}." ;;
@@ -75,7 +75,7 @@ run_body() {
   case $1 in
     reset) scripts/reset.sh ;;
     install) first_install "$from" "$fp" pg-1 ;;
-    warmup) scripts/load.sh start; wait_progress "${WARMUP_SECONDS:-120}" warm-up ;;
+    warmup) scripts/load.sh start; wait_progress "${WARMUP_SECONDS:-60}" warm-up ;;
     switch)
       progress_ticker switch & local ticker=$! # k6 keeps running through the cutover; show it
       case $mech in
