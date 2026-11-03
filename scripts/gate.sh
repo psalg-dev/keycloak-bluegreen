@@ -60,6 +60,11 @@ def probes_ig($from; $to; $what): [$L[] | select(.step == "logout_probe" and .ts
 '
 
 fails=0
+# why <rule>: the rule's "why it matters" line from scripts/gate/why.tsv (every rule should have one)
+why() {
+  local w; w=$(awk -F'\t' -v r="$1" '$1 == r {print $2}' "$(dirname "$0")/gate/why.tsv")
+  [[ -z $w ]] || printf '    why: %s\n' "$w" | fold -s -w 120 | sed '2,$s/^/         /'
+}
 # rule <name> <jq expr yielding {r, d, bad?}>
 rule() {
   local out head r
@@ -67,6 +72,7 @@ rule() {
     "$PRE ($2) | \"\(.r)\t\(.d)\", ((.bad // [])[:5][] | del(.ts, .te) | tojson)")
   head=${out%%$'\n'*} r=${head%%$'\t'*}
   printf '%-32s %-5s %s\n' "$1" "$r" "${head#*$'\t'}"
+  why "$1"
   [[ $out != *$'\n'* ]] || printf '%s\n' "${out#*$'\n'}" | sed 's/^/      /'
   [[ $r != FAIL ]] || fails=$((fails + 1))
 }

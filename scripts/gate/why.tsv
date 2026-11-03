@@ -1,0 +1,35 @@
+# rule<TAB>why it matters (printed under each gate row). One line per rule; add a line when you add a rule.
+has_lines	no k6 data means nothing was measured; every other PASS would be meaningless
+issuer_stable	relying parties pin the issuer; a token whose iss differs from its network's issuer is rejected (or worse, accepted from a forged host)
+no_5xx	any 5xx or dropped connection during the deployment is downtime that a user or an app actually sees
+reads_ok	resource servers fetch discovery + JWKS to validate tokens; if these fail, every API call in the estate starts failing
+claims_present	apps authorize on sub/iss and our custom claims (tenant, login_ctx); a token missing them breaks authorization downstream
+sub_stable	sub is the user's identity in every downstream app; a changed sub looks like a different person (lost data, duplicate accounts)
+inflight_login	a user mid-login during the flip (started on the old version, finishing on the new) must not be thrown out of the login
+refresh_across_switch	sessions created before the switch must keep refreshing afterwards, or every logged-in user is logged out by a deployment
+no_invalid_grant	invalid_grant on refresh = a session the server forgot; for a shared-DB switch nothing may be forgotten
+logout_probe_never_ok	a session the user logged out of must stay dead; if it refreshes again, a logout did not protect the user (security)
+invalid_grant_in_window	lossy overlap: only sessions created inside the copy window may be lost; anything else lost is real data loss
+refresh_pre_copy	sessions older than the copy point exist on both databases; losing one of them means the copy or migration lost data
+relogin_ok	a lost session must be recoverable silently via the legacy IdP's SSO; if the re-login fails, the user is really locked out
+logout_after_replay	logouts done on the old version during the window are replayed; if replay misses one, that session comes back to life (security)
+inflight_login_rollback	the same in-flight guarantee for the flip back: a rollback must not break users who are mid-login
+refresh_blue_after_rollback	sessions from before the switch must survive a rollback too; a rollback must not log everybody out
+refresh_green_after_rollback	users who logged in on the NEW version must stay logged in after the rollback, or a rollback logs out everyone who arrived after the switch
+invalid_grant_phases	lossy rollback: sessions may only be lost where the design says (window on the way out, green-only sessions on the way back)
+refresh_pre_copy_after_rollback	sessions older than the copy point must still work after rolling back to the old database
+logout_after_rollback_replay	logouts done on the new version are reverse-replayed onto the old one; a miss resurrects that session after the rollback (security)
+green_users_sub_kept	users created on the new version must keep their sub when we roll back, or they come back as a different identity
+rollback_seconds	how long a rollback takes from decision to flip: the time users are exposed to a bad release after we notice
+lossy_seconds	length of the window in which new sessions on the old version will be lost: the blast radius of a lossy upgrade
+sessions_lost	how many users had to re-login because of the upgrade (silent via SSO here; visible if the IdP session had expired)
+relogins	how many silent re-logins the lost sessions caused: extra load on Keycloak and the legacy IdP right after the cutover
+logouts_replayed	logouts carried over from the old version; each one would otherwise be a resurrected session
+users_replayed	users first created on the old version during the window; each one would otherwise get a new sub on the new version
+resurrection_seconds	time during which a logout made on the old version could still be undone on the new one: the security exposure window
+green_sessions_lost	sessions created on the new version that a lossy rollback throws away (users re-login once)
+relogins_after_rollback	silent re-logins caused by the rollback
+reverse_logouts_replayed	logouts from the new version carried back onto the old one by the rollback
+reverse_users_replayed	users created on the new version, recreated on the old one with the same id by the rollback
+resurrection_seconds_rollback	exposure window after a rollback during which a logout made on the new version could still be undone
+window_sessions_back	sessions from the forward window that work again after rolling back to the old DB (they were never really gone there)
