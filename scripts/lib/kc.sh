@@ -65,7 +65,11 @@ kube_connect() {
   docker network inspect kind -f '{{range .Containers}}{{.Name}} {{end}}' | grep -qw "$me" \
     || docker network connect kind "$HOSTNAME"
   mkdir -p ~/.kube
-  kind get kubeconfig --internal --name "$CLUSTER" > ~/.kube/config
+  # atomic and only on change: an in-place rewrite left the file empty for a moment, and a concurrent kubectl (another
+  # job on the shared kube volume) fell back to localhost:8080 = Jenkins (laptop build #26)
+  local tmp=~/.kube/config.$$
+  kind get kubeconfig --internal --name "$CLUSTER" > "$tmp"
+  if cmp -s "$tmp" ~/.kube/config; then rm -f "$tmp"; else mv -f "$tmp" ~/.kube/config; fi
 }
 
 image_tag() { echo "$1-p${2:-1}"; } # <kc_version> [provider_version]
