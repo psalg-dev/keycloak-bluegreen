@@ -474,11 +474,23 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
 - Between `switch` and `replay_done` (~drain time), a session logged out on blue in the window can still refresh on green.
   Measured as `resurrection_seconds`.
 - Lossy only works because Keycloak holds no credentials. A realm with local passwords would lose password changes; use a strict freeze there.
-- `stateless` is a preview feature, and it roughly doubles DB load.
+- `stateless` is GA since 26.8.0 (preview in 26.7), and it roughly doubles DB load.
 - The major demo is 25 -> 26 because 27 does not exist yet. Swap `cases.env` to 26 -> 27 when it ships.
   On 25, sessions survive the copy only because `persistent-user-sessions` (preview in 25) is on from the first start.
   A real 25 deployment that never enabled it would lose ALL online sessions in a major upgrade (silent re-login for everyone).
 - Single host: all KinD "zones" are one machine, and clock skew between clusters (stateless needs < 10 s) cannot occur here.
 - Legacy IdP is 1 replica with in-memory sessions (stand-in; it is not what's under test).
 - Writes on the old color after a rollback flip are lost (no reverse replication).
-- No backchannel logout receiver; logout coverage = RP-initiated logout + event listener.
+- Back-/front-channel logout is measured only through the two test apps (testclient-bc/-fc); k6's direct flows cover
+  RP-initiated logout + the event listener.
+- Replay reads the demo-replay listener's lines from blue's stdout. A crash between commit and println, log rotation
+  or a lost node drops lines silently; a container restart or pod recreation inside the window is detected and fails
+  the replay, nothing else is. Production: a transactional outbox (same DB transaction) shipped to the new DB.
+- After the second replay, blue still runs (drain; `KEEP_OLD` for the rollback hold). Writes that reach it then (only
+  pods labelled `kc-blue-keycloak-client=true` can, through blue's own Service) are not replayed.
+- Rollback to the old DB: green's session expiry/cleanup is not reverse-replayed, so sessions blue still holds can work
+  again after the flip back (`window_sessions_back`).
+- The replay window starts at the launcher's wall clock (copy point - 5 s) and is read with kubelet log timestamps:
+  one host here; production needs synced clocks or an event-time cursor.
+- In-flight admin/account writes: the freeze waits until the ingress answers 503 on both hosts plus a 2 s settle before
+  the copy point, a fixed settle rather than request tracking.
