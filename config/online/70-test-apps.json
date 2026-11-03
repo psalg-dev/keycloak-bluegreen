@@ -29,6 +29,17 @@
           "protocol": "openid-connect",
           "protocolMapper": "demo-login-context-mapper",
           "config": {}
+        },
+        {
+          "name": "aud-testresource",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "testresource",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false"
+          }
         }
       ],
       "frontchannelLogout": false,
@@ -68,6 +79,17 @@
           "protocol": "openid-connect",
           "protocolMapper": "demo-login-context-mapper",
           "config": {}
+        },
+        {
+          "name": "aud-testresource",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "testresource",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true",
+            "id.token.claim": "false"
+          }
         }
       ],
       "frontchannelLogout": true,

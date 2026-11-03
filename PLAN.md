@@ -492,5 +492,10 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
   again after the flip back (`window_sessions_back`).
 - The replay window starts at the launcher's wall clock (copy point - 5 s) and is read with kubelet log timestamps:
   one host here; production needs synced clocks or an event-time cursor.
+- Upgrade trap (found live, build #13): since Keycloak 26.6, token introspection answers 200 `{"active":false}` unless
+  the introspecting client is in the token's `aud` (azp is not enough). A resource server that introspects without an
+  Audience mapper works on 25 and silently fails after the upgrade. The demo's test clients carry an Audience mapper
+  for `testresource` (config/online/70-test-apps.json); bypass options exist (`allow-token-introspection-without-
+  audience-check`, per-client compatibility mode) but the mapper is the correct fix.
 - In-flight admin/account writes: the freeze waits until the ingress answers 503 on both hosts plus a 2 s settle before
   the copy point, a fixed settle rather than request tracking.
