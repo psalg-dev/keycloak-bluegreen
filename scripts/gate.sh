@@ -36,7 +36,11 @@ def verdict(ok; d): {r: (if ok then "PASS" else "FAIL" end), d: d};
 def skip(d): {r: "SKIP", d: d};
 def info(v): {r: "INFO", d: "\(v)"};
 def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
-($k | map(. + {ts: (.t_start | ts), te: (.t_end | ts)})) as $L
+($k | map(. + {ts: (.t_start | ts), te: (.t_end | ts)})) as $all
+# Requests k6 aborts itself on SIGINT (status 0, starting at/after load_stop) are not server behaviour: no rule sees them.
+| ev("load_stop") as $ls
+| [$all[] | select(.status == 0 and $ls != null and .ts >= $ls)] as $aborted
+| [$all[] | select((.status == 0 and $ls != null and .ts >= $ls) | not)] as $L
 | ev("switch") as $sw | ev("copy_point") as $cp | ev("replay_done") as $rd
 | ev("rollback_start") as $rbs | ev("rollback") as $rb | ev("rollback_replay_done") as $rrd
 | ([$e[] | select(.event == "switch") | .to] | .[0]) as $new
@@ -77,9 +81,8 @@ rule has_lines 'verdict($L | n > 0; "\($L | n) k6 lines")'
 rule issuer_stable '[$L[] | select(.iss != null)] as $a
   | [$a[] | select(.iss != "https://kc-\(.net).localtest.me/keycloak/realms/demo")] as $b
   | verdict($a != [] and $b == []; "\($a | n) issuers (\([$a[] | select($sw == null or .ts < $sw)] | n) before switch), \($b | n) not the one of their net") + {bad: $b}'
-rule no_5xx 'ev("load_stop") as $ls | [$L[] | select(.status == 0 and $ls != null and .ts >= $ls)] as $abort
-  | [$L[] | select(.status >= 500 or (.status == 0 and ($ls == null or .ts < $ls)))] as $b
-  | verdict($b == []; "\($b | n) of \($L | n) responses >= 500 or status 0 (\($abort | n) aborted by the k6 stop, not counted)") + {bad: $b}'
+rule no_5xx '[$L[] | select(.status >= 500 or .status == 0)] as $b
+  | verdict($b == []; "\($b | n) of \($L | n) responses >= 500 or status 0 (\($aborted | n) aborted by the k6 stop, not judged)") + {bad: $b}'
 rule reads_ok '[$L[] | select(.scenario == "reads")] as $a | [$a[] | select(.status != 200)] as $b
   | verdict($a != [] and $b == []; "\($a | n) reads, \($b | n) not 200") + {bad: $b}'
 rule claims_present '[$L[] | select(tok)] as $a

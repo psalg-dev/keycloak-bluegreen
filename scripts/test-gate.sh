@@ -14,6 +14,8 @@ pass-shared        |shared|shared-base shared-inflight-ok                  |shar
 inflight-broken    |shared|shared-base shared-inflight-broken              |shared|1|inflight_login=FAIL
 wrong-iss          |shared|shared-base shared-inflight-ok shared-wrong-iss |shared|1|issuer_stable=FAIL
 skip-no-switch     |shared|shared-base shared-inflight-ok                  |none  |0|inflight_login=SKIP refresh_across_switch=SKIP
+aborted-at-stop    |shared|shared-base shared-inflight-ok shared-aborted   |shared-stop|0|no_5xx=PASS refresh_across_switch=PASS
+neterr-before-stop |shared|shared-base shared-inflight-ok shared-neterr    |shared-stop|1|no_5xx=FAIL refresh_across_switch=FAIL
 pass-lossy         |lossy |lossy-base                                       |lossy |0|refresh_pre_copy=PASS invalid_grant_in_window=PASS relogin_ok=PASS logout_after_replay=PASS
 probe-after-replay |lossy |lossy-base lossy-probe-ok                       |lossy |1|logout_after_replay=FAIL
 pre-copy-grant     |lossy |lossy-base lossy-pre-copy-ig                    |lossy |1|refresh_pre_copy=FAIL invalid_grant_in_window=FAIL
