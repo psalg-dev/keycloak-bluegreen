@@ -1,6 +1,14 @@
 server:
   port: 8080
-  forward-headers-strategy: framework # ingress terminates TLS; issuer/redirects use X-Forwarded-Proto/Host
+  # Ingress terminates TLS; the issuer follows X-Forwarded-Host/-Proto/-Port. `native` = Tomcat's RemoteIpValve: only
+  # those X-Forwarded-* headers, only from internal-proxies. `framework` also honoured RFC 7239 `Forwarded` (which
+  # ingress-nginx passed through) from ANY peer: `Forwarded: host=evil.example;proto=http` gave issuer http://evil.example.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # The only proxy is ingress-nginx, a pod: kind's pod subnet (kubeadm podSubnet). Override: SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES.
+      internal-proxies: 10.244.0.0/16
+      protocol-header: X-Forwarded-Proto
   servlet:
     session:
       timeout: 8h # the legacy SSO session that makes Keycloak re-logins silent

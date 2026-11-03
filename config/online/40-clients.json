@@ -49,6 +49,16 @@
           "config": {}
         }
       ]
+    },
+    {
+      "clientId": "admin-cli",
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "account",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
     }
   ]
 }

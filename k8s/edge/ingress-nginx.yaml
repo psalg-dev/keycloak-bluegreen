@@ -1,0 +1,32 @@
+# Controller-wide edge hardening, referenced from the ingress-nginx-controller ConfigMap (patched by scripts/up.sh).
+# Controller-wide, not per Ingress: it also covers Ingress kc-freeze, the legacy IdP and anything added later.
+#
+# proxy-set-headers: request headers a client could use to pick the issuer/base URL, removed before any backend sees
+# them (empty value = nginx does not send the header). ingress-nginx passes them through untouched otherwise:
+#   Forwarded (RFC 7239)      Spring `forward-headers-strategy: framework` preferred it -> legacy issuer http://evil.example
+#   X-Forwarded-Prefix/-Ssl   Spring framework strategy honours them (path prefix / scheme)
+#   X-Forwarded-Server, X-Original-Host, X-Host   host overrides of other stacks
+# Only headers the template does NOT set itself belong here: a key it already sets (X-Forwarded-Host/-Proto/-Port) is
+# not replaced but sent a SECOND time (custom lines are appended after the built-in ones in nginx.tmpl).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kc-proxy-headers
+  namespace: ingress-nginx
+data:
+  Forwarded: ""
+  X-Forwarded-Prefix: ""
+  X-Forwarded-Ssl: ""
+  X-Forwarded-Server: ""
+  X-Original-Host: ""
+  X-Host: ""
+---
+# add-headers: response headers on every response (http-level more_set_headers; no location sets its own, so all inherit).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kc-response-headers
+  namespace: ingress-nginx
+data:
+  # ZAP 10063. Deny powerful features nobody here uses; WebAuthn (publickey-credentials-*) stays at its default (self).
+  Permissions-Policy: "accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()"
