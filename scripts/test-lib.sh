@@ -20,4 +20,9 @@ jq -s -e 'length == 2
 [[ $(PROFILE=laptop bash -c ". '$lib'; echo \$KC_REPLICAS \$PG_INSTANCES \$KIND_CONFIG \$LOGIN_RATE_DEFAULT") == "2 2 kind/cluster-laptop.yaml 2" ]] \
   || { echo "FAIL laptop profile"; exit 1; }
 if PROFILE=bogus bash -c ". '$lib'" 2>/dev/null; then echo "FAIL unknown PROFILE accepted"; exit 1; fi
+# every script outside lib/ runs as a command (Jenkins, other scripts): committed 100755. Windows checkouts don't record
+# chmod, so a new script lands 100644 and fails with exit 126 at its first call (purge-sessions.sh, laptop build #31)
+noexec=$(git -C "$(dirname "$lib")/../.." ls-files -s 'scripts/*.sh' \
+  | awk '$1 != "100755" && $4 !~ /\/lib(\/|\.sh$)/ {print $4}')
+[[ -z $noexec ]] || { echo "FAIL not executable in git (git update-index --chmod=+x): $noexec"; exit 1; }
 echo "OK test-lib"
