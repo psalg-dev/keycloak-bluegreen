@@ -41,7 +41,7 @@ kube_connect
     failure {
       // a failed stage must not leave k6 hammering the cluster; collect what it has for the post-mortem
       sh '''#!/usr/bin/env bash
-scripts/load.sh stop 2>/dev/null || true
+scripts/load.sh stop || true # stderr stays: log() writes there (build #10 lost its k6 lines silently)
 '''
     }
     always {
