@@ -3,11 +3,14 @@
 # library doesn't know (it is built against an older Keycloak), so every leaf of config/<stage>/*.json must be visible
 # in Keycloak's own export. Arrays of objects are matched by their identity key (alias, clientId, name, ...).
 # Values with $(...) substitutions (secrets) are skipped; so is "users" (service-account role mappings).
+# check-config.sh <stage> [color]: with a color, read that color's Keycloak directly (port-forward), not via the
+# ingress, e.g. green on its own DB before a lossy switch. config.sh runs this after every stage: a hard gate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
 TAG="verification"
 stage=${1:?stage}
+if [[ -n ${2:-} ]]; then admin_direct_start "$2"; trap admin_direct_stop EXIT; fi
 
 # shellcheck disable=SC2016 # jq program
 subset='

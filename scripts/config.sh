@@ -59,3 +59,4 @@ if ! kubectl -n "$NS" wait "job/$job" --for=condition=complete --timeout=600s >/
   die "config-cli $stage on kc-$color failed"
 fi
 log "config $stage applied to kc-$color ($cli)"
+scripts/check-config.sh "$stage" "$color" # every field must have landed: config-cli drops unknown fields silently
