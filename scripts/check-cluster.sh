@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="verification"
 color=${1:?color}
 sel="app.kubernetes.io/name=keycloak,app.kubernetes.io/instance=kc-$color"
 

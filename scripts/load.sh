@@ -7,6 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="load test"
 
 LNS=load
 # Secret -> namespace it is copied from. ponytail: k6-app assumed in ns keycloak (Slice 2 owns it).

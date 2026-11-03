@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="data"
 count=${1:-4000} chunk=500
 log "seeding $count linked users via partialImport ($chunk per request)"
 

@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/lib/kc.sh
+TAG=security
 . scripts/security/lib.sh
 
 expect=${EXPECT_ADMIN_PUBLIC:-true}

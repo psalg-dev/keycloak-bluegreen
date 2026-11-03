@@ -9,6 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="replay"
 from=${1:?from} to=${2:?to} since=${3:?since}
 
 lines=$(mktemp)

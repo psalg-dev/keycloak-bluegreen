@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="verification"
 
 hosts=(kc-net1.localtest.me kc-net2.localtest.me)
 secret=$(kubectl -n "$NS" get secret kc-config-cli -o jsonpath='{.data.secret}' | base64 -d)

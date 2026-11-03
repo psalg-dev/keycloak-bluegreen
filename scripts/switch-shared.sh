@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="deployment"
 target=${1:?target_version} provider=${2:?provider_version}
 active=$(state activeColor) db=$(state activeDb) from=$(state version)
 idle=$([[ $active == blue ]] && echo green || echo blue)

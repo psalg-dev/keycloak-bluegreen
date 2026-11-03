@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/lib/kc.sh
+TAG=security
 
 min=${KCWARDEN_MIN_SEVERITY:-HIGH}
 out=out/security base=https://kc-net1.localtest.me/keycloak

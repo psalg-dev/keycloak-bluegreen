@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="reset"
 
 log "reset: removing load, both colors, freeze, config jobs, all DBs (waits for CNPG cleanup)"
 kubectl -n load delete job --all --ignore-not-found >/dev/null 2>&1 || true

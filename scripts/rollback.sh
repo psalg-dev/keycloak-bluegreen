@@ -8,6 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="deployment"
 cur=$(state activeColor) curdb=$(state activeDb) curv=$(state version)
 old=$(state previousColor) olddb=$(state previousDb) oldv=$(state previousVersion)
 [[ -n $old ]] || die "no previous state in kc-state: nothing to roll back to"

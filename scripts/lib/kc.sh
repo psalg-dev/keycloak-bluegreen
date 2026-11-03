@@ -7,8 +7,15 @@ CHART=oci://registry-1.docker.io/bitnamicharts/keycloak
 CHART_VERSION=25.2.0
 KC_IMAGE=kc-bluegreen/keycloak
 
-log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >&2; }
+# TAG (each script sets one; helpers here inherit the caller's) says what kind of work a line belongs to:
+# [deployment], [load test], [config], [database], [replay], [verification], ...
+log() { printf '%s %s%s\n' "$(date -u +%FT%TZ)" "${TAG:+[$TAG] }" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
+
+# Any command that fails (and isn't handled with if/||) logs its exit code, script:line and the command itself, so a
+# red Jenkins stage says WHAT failed. errtrace: also inside functions. (Same rules as set -e: conditions don't trigger.)
+set -o errtrace
+trap 'log "FAILED (exit $?) at ${BASH_SOURCE[0]##*/}:$LINENO: $BASH_COMMAND"' ERR
 
 # event <name> [key=value...] -> one JSON line in out/events.jsonl (the gate reads these)
 event() {
@@ -50,6 +57,7 @@ build_opts() {
 
 # build_image <kc_version> [provider_version]: build + load into kind (skipped if the node already has it)
 build_image() {
+  local TAG=build
   local tag opts; tag=$(image_tag "$1" "${2:-1}"); opts=$(build_opts "${1%%.*}")
   log "building image $KC_IMAGE:$tag (provider jar + tests + kc.sh build; a new version takes minutes)"
   # stream only the build-step headers ("#7 [ext 4/7] RUN mvn ... verify"), so a long build is visibly alive
@@ -69,6 +77,7 @@ ensure_secret() {
 
 # create_db <name>: CNPG cluster, waits until Ready
 create_db() {
+  local TAG=database
   log "creating db $1 (3 instances, sync replication) and waiting for Ready"
   DB=$1 NS=$NS envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$1" --for=condition=Ready --timeout=600s >/dev/null
@@ -183,6 +192,7 @@ admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE
 # cluster under the same name while the old pods still terminate makes CNPG count them, mark the new cluster
 # initialized, then find no PVCs -> "unrecoverable" (2026-11-02; `delete --wait` returns before GC is done).
 delete_dbs() {
+  local TAG=database
   # Teardown only: skip Postgres' smart shutdown (CNPG default: wait up to 180 s for sessions to end before a fast
   # shutdown). It protects in-flight transactions in real operations; here the data is being thrown away.
   local c; for c in $(kubectl -n "$NS" get cluster.postgresql.cnpg.io -o name); do
@@ -199,7 +209,7 @@ delete_dbs() {
 # wait_progress <seconds> <label>: sleep, but log every 30 s what the load generator sees so far
 # (requests, 5xx/status 0, refresh invalid_grant, logins, logged-out sessions that still refresh). Silent sleeps make a live run look dead.
 wait_progress() {
-  local total=$1 label=$2 waited=0 step p
+  local total=$1 label=$2 waited=0 step p TAG="load test"
   while ((waited < total)); do
     step=$((total - waited < 30 ? total - waited : 30)); sleep "$step"; waited=$((waited + step))
     p=$(kubectl -n load get pod -l job-name=k6 -o name 2>/dev/null | head -1)

@@ -5,6 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 . scripts/lib/kc.sh
+TAG=security
 . scripts/security/lib.sh
 
 # Targets: kc-active + every color that has running pods (a Service without endpoints would look "blocked").

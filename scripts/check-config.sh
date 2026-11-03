@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="verification"
 stage=${1:?stage}
 
 # shellcheck disable=SC2016 # jq program

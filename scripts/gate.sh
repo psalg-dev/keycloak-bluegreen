@@ -15,6 +15,7 @@
 set -euo pipefail
 # shellcheck source-path=SCRIPTDIR
 . "$(dirname "$0")/lib/kc.sh"
+TAG=verification
 
 mode=${1:-} k6=${2:-} ev=${3:-}
 base=${mode%-rollback}

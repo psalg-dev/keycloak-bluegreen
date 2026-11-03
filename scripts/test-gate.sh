@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="test"
 
 F=load/fixtures
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT

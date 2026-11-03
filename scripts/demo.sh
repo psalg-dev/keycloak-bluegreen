@@ -39,12 +39,35 @@ explain() {
     cooldown) title="Cool-down" text="Keep k6 running ${COOLDOWN_SECONDS:-90} s on the final color: the gate needs refreshes of older sessions and logout probes AFTER the switch/replay. Then stop k6 (requests it aborts itself are excluded) and collect its lines into out/$what/." ;;
     gate) title="Gate" text="Judge out/$what/ (k6 lines + switch events): no 5xx, issuer stable per network, same sub per user, in-flight logins and refresh tokens survive, logged-out sessions stay logged out (+ the $mech rules)." ;;
   esac
-  log "=== [$n/${#phases[@]}] $title ($what: $from -> $to, $db)"
+  local kind=${TAG^^}
+  TAG='' log "=== [$n/${#phases[@]}] $kind | $title ($what: $from -> $to, $db)"
   fold -s -w 110 <<<"$text" | sed 's/^/    /' >&2
 }
 
+phase_tag() { # what kind of work a phase is: tags every line it logs (scripts it calls set their own)
+  case $1 in
+    reset) TAG=reset ;; install | switch | rollback) TAG=deployment ;; warmup | cooldown) TAG="load test" ;; gate) TAG=verification ;;
+  esac
+}
+
+# run_phase <phase>: header, the phase body as its own process (so `set -e` holds inside it and its exit code is
+# real), then one result line: OK/FAILED, exit code, duration. A failed phase stops the case with that exit code.
 run_phase() {
-  explain "$1"
+  phase_tag "$1"; explain "$1"
+  local t0=$SECONDS rc=0 n i
+  for i in "${!phases[@]}"; do [[ ${phases[$i]} == "$1" ]] && n=$((i + 1)); done
+  "$0" "$what" "$1" --body || rc=$? # `||`: the ERR trap stays quiet, the result line below reports it
+  local d=$((SECONDS - t0)) kind=${TAG^^}
+  if ((rc == 0)); then
+    TAG='' log "=== [$n/${#phases[@]}] $kind | $1: OK (exit 0) in $((d / 60))m$((d % 60))s"
+  else
+    TAG='' log "=== [$n/${#phases[@]}] $kind | $1: FAILED (exit $rc) after $((d / 60))m$((d % 60))s"
+    exit "$rc"
+  fi
+}
+
+run_body() {
+  phase_tag "$1"
   case $1 in
     reset) scripts/reset.sh ;;
     install) first_install "$from" "$fp" pg-1 ;;
@@ -70,7 +93,10 @@ run_phase() {
   esac
 }
 
-if [[ $phase == all ]]; then
+if [[ ${3:-} == --body ]]; then
+  trap - ERR # the body's failing command is already logged by the script that ran it; run_phase reports the phase
+  run_body "$phase"
+elif [[ $phase == all ]]; then
   for p in "${phases[@]}"; do run_phase "$p"; done
 else
   run_phase "$phase"

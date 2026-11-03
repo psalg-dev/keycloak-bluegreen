@@ -7,6 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="config"
 stage=${1:?stage} color=${2:?color}
 [[ -d config/$stage ]] || die "no config/$stage"
 

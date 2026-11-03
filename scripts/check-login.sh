@@ -7,6 +7,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
+TAG="verification"
 
 ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
 resolve=(); for h in kc-net1 kc-net2 legacy-net1 legacy-net2; do resolve+=(--resolve "$h.localtest.me:443:$ip"); done
