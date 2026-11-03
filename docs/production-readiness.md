@@ -1,6 +1,8 @@
 # Production readiness: blue/green Keycloak (keycloak-bluegreen)
 
-Status: assessment of the demo at commit `be54a1d` (2026-11-03). Web sources checked 2026-11-03.
+Status: assessment of the demo at commit `0665ed4` (2026-11-03), updated after the final run (builds #33-#37, all
+five cases, every gate PASS) and the 2026-11-03 decisions (security items and three unbuilt PLAN promises accepted;
+sections 10 and 13). Web sources checked 2026-11-03.
 Scope: what it would take to run this repo's approach in an enterprise environment: managed Kubernetes across 3 AZs,
 Bitnami chart, Jenkins, ingress-nginx, keycloak-config-cli, a custom provider JAR, brokering to a legacy Spring
 auth server, `hostname-strict=false` behind several ingresses.
@@ -41,33 +43,35 @@ Conventions:
 - The replay source: `kubectl logs` of pod stdout (`scripts/replay.sh:16-20`).
 
 **Biggest gaps (ranked)**
-1. **The lossy mechanism has never passed a live gate.** wl:slice5-6-switches: "Slice 6 (lossy) ... untested on the
-   cluster yet". `out/` holds only patch artifacts: `out/jenkins-patch.log` ends `GATE PASS (shared)`, and no events
-   file contains `copy_point` or `promoted`. The minor, major and lossy-rollback cases are code plus offline
-   fixtures.
-2. **The replay source is not durable.** There are three silent loss paths: kubelet log rotation, pod
+1. **The replay source is not durable.** There are three silent loss paths: kubelet log rotation, pod
    *replacement* (not restart), and a crash between commit and `println`. A swallowed error in `replay.sh` makes a
-   failed logout replay count as done (section 2.3).
-3. **The DB is the single point of the design** and is under-specified for production. The demo has no backups or
+   failed logout replay count as done (section 2.3). This is the one blocker the live runs did not remove.
+2. **The DB is the single point of the design** and is under-specified for production. The demo has no backups or
    PITR. The `stateless` requirements apply: synchronous HA replication, commit latency under 10 ms, roughly 2x DB
    load. The replica-and-promote step must be re-engineered for a managed DB (section 4).
-4. **The edge is EOL.** ingress-nginx stopped receiving security fixes in March 2026. The Host guard is an nginx
+3. **The edge is EOL.** ingress-nginx stopped receiving security fixes in March 2026. The Host guard is an nginx
    `server-snippet` (`scripts/up.sh:29-32`) with no 1:1 equivalent elsewhere (section 3).
-5. **Change control is missing.** The dropped-field check (`scripts/check-config.sh`) is not called by any script
-   or pipeline. Images are not digest-pinned or signed, and Jenkins plugins are unpinned.
+4. **Change control is partly missing.** The dropped-field check *is* wired now: `config.sh:65` calls
+   `check-config.sh <stage> <color>` after every stage, so a field config-cli silently drops fails the run. Still
+   missing: images are not digest-pinned or signed, Jenkins plugins are unpinned, and no CI runs the config checks on
+   the public repo (GitHub Actions runs the offline gate/report/lib tests only, `.github/workflows/checks.yml`).
+5. **Accepted risks (2026-11-03, user decision).** The security findings, the rollback hold, the zone-loss drill and
+   the cross-cluster integration tests are accepted as-is or not built; the list with reasons is in section 10 and
+   section 13. Nothing here blocks the demo; each stays a production item.
 
 **Go / no-go per mechanism**
 
 | Mechanism | Verdict | Evidence | Condition to flip to GO |
 |---|---|---|---|
-| Shared-DB switch (patch) | **GO for staging; GO for prod after the platform work in Phase 1-2** | `out/jenkins-patch.log`: `GATE PASS (shared)`, 0 of 29069 responses >= 500, 54 in-flight logins across the switch with 0 failures, 0 invalid_grant, 1485 logout probes with 0 refreshed. Build #2 analysis in wl:slice5-6. | Same gate on prod-like infra (real AZs, real LB, managed DB) at prod login rate. Run the planned negative control (no `stateless`). |
-| Lossy overlap + replay (minor/major) | **NO-GO** | No live run. Code review only. | A live gate PASS for minor and major. A durable replay sink. Answers on offline tokens and refresh-token rotation (section 2.3). |
-| Rollback, shared DB | **Conditional** | `out/jenkins-run.log` (patch-rollback, a run in progress at the time of writing): flip back at 01:02:50Z with "0 5xx/neterr, 0 refresh invalid_grant, 0 logged-out refreshes" through cool-down 60/90 s. The Gate stage had not run yet. | A completed `shared-rollback` gate PASS. |
-| Rollback, lossy | **NO-GO** | Never run. | As for lossy, plus a hold period shorter than the SSO idle timeout (section 2.4). |
-| Rollback window in the default path | **Gap** | No hold timer exists in code (`ROLLBACK_HOLD` appears only in PLAN.md). Without `KEEP_OLD=true`, the old color is scaled to 0 right after the drain (`switch-shared.sh:52-53`, `switch-lossy.sh:70`). | Implement the hold: keep the old color for N minutes, then scale down (section 2.4). |
+| Shared-DB switch (patch) | **GO for staging; GO for prod after the platform work in Phase 1-2** | builds #33/#34: `GATE PASS (shared)`, 0 of 29 030 responses >= 500, in-flight logins across the switch with 0 failures, 0 `invalid_grant`, logout probes with 0 refreshed (`README.md` Results). | Same gate on prod-like infra (real AZs, real LB, managed DB) at prod login rate. The negative control (no `stateless`) is still not run (accepted). |
+| Lossy overlap + replay (minor/major) | **Demo-verified by a live gate PASS; NO-GO for production** | builds #35-#37: `minor`, `minor-rollback`, `major` all PASS; sessions lost = silent re-logins 4 / 9 / 5; no pre-copy-point session lost, no logged-out session resurrected; 82 / 90 / 68 users replayed (`README.md` Results). | A durable replay sink; answers on offline tokens and refresh-token rotation (section 2.3). |
+| Rollback, shared DB | **Demo-verified** | build #34 `patch-rollback` PASS: flip back, 0 5xx/network errors, 0 `invalid_grant`, 0 logged-out refreshes. | The same gate on prod-like infra. |
+| Rollback, lossy | **Demo-verified; NO-GO for production** | build #36 `minor-rollback` PASS, forward and reverse replay (2 green-born sessions, 30 logouts + 90 users back). | As for lossy, plus a hold shorter than the SSO idle timeout (section 2.4). |
+| Rollback window in the default path | **Accepted, not built** (2026-11-03) | No hold timer in the code (`ROLLBACK_HOLD` only in PLAN.md). Without `KEEP_OLD=true` the old color is scaled to 0 after the drain (`switch-shared.sh:51-57`, `switch-lossy.sh:67-70`). | Build the hold when a real deployment needs a post-switch window. |
 
-Also note: the security fixes (`2018bd5`) were verified offline only. wl:security-fixes, "NOT verified live
-(cluster busy)".
+Also note: the security fixes (`2018bd5`) are verified live now: kc-security #2 (2026-11-03) runs 14 probes on the
+hardened cluster, 1 FAIL (trivy: guava CVE in the Keycloak 26.8.1 distribution) and 3 WARN (admin console public, two
+ZAP findings). All are accepted, with reasons, in section 10.
 
 **Correction to the brief (verified 2026-11-03).** `stateless` is **no longer a preview feature** on the version
 the demo targets. Keycloak 26.8.0 release notes: "multi-cluster v2 and the `stateless` feature are promoted from
@@ -129,10 +133,11 @@ or vanish without notice.
   5. Drain for 60 s and scale the old color to 0 (52-54).
 - The guard is "same major.minor" only (line 17). The `kc.sh update-compatibility` pre-flight was dropped: it
   compares the full config, and running it inside a live pod re-augmented the pod's build (wl:slice5-6, INCIDENT).
-- The maintenance stage is **not implemented** on this path. PLAN.md:341 promises `RUN_MAINTENANCE` behind a freeze,
-  but `switch-shared.sh` never calls `config.sh maintenance`. Only `switch-lossy.sh:53` does.
-- The gate passed once on a recorded run (section 1). The planned negative control (same switch without `stateless`,
-  PLAN.md:342) was not run: no `-nostateless` image anywhere in `scripts/`.
+- The maintenance stage is **not run on this path** (deliberate, accepted): `switch-shared.sh` never calls
+  `config.sh maintenance`; only the lossy path does (`switch-lossy.sh:61`, behind `RUN_MAINTENANCE`). A patch release
+  should carry only online-stage config (section 7, rec 5).
+- The gate passed on the final run (builds #33/#34). The negative control (same switch without `stateless`,
+  PLAN.md:342) is not built: no `-nostateless` image exists; accepted (section 10).
 
 **Is the outbox safe under real write rates?**
 - Realm/client/role config writes are rare (config-cli runs). The outbox handles them easily. The 100 ms delay per
@@ -143,7 +148,8 @@ or vanish without notice.
   to 500 ms for consumption. [assumed: Keycloak writes/invalidates on FORCE sync even when values are unchanged; not
   measured in this repo.]
 - Outbox correctness depends on clock skew under 10 s and on both colors reaching the same primary. A DB failover
-  mid-switch is untested (the zone-loss step 6z in PLAN.md:332-339 is not implemented: no `ZONE_LOSS` in `scripts/`).
+  mid-switch is untested (the zone-loss step 6z in PLAN.md:332-339 is not implemented: no `ZONE_LOSS` in `scripts/`;
+  accepted 2026-11-03, section 10).
 
 **Rec**
 - Measure, in staging at prod login rate, during a switch:
@@ -238,8 +244,8 @@ Use the outbox row id at the copy point instead.
   migration strategy to pre-run the SQL on the promoted copy before green starts.
 
 **Rec (verdict)**: before any production use:
-- a live minor gate PASS and a major gate PASS
-- the cross-major refresh-token result recorded (PLAN.md:411-414 decision rule)
+- ~~a live minor gate PASS and a major gate PASS~~ **done 2026-11-03** (builds #35, #37)
+- ~~the cross-major refresh-token result recorded (PLAN.md:411-414 decision rule)~~ **done** (build #37)
 - the durable sink
 - the two Opens answered: offline tokens, refresh-token rotation
 
@@ -253,15 +259,15 @@ built) instead of lossy. A short 503 on login/token is honest. A wave of `invali
 - Lossy: back to the old color *and* the old DB (a migrated schema cannot be downgraded). Green's logouts and
   creations are reverse-replayed. Everything else green wrote since the switch is lost (lines 22-35).
 - It refuses when the old color has fewer than 2 Ready pods (line 16). Past that point: fix forward.
-- **There is no hold in the code.** PLAN.md:102 and PLAN.md:368 describe `ROLLBACK_HOLD` (10 min in Jenkins), but no
-  script reads it (`grep ROLLBACK_HOLD scripts/`: no hits).
-  - Default path: the old color is scaled to 0 right after the drain, 60 s shared (`switch-shared.sh:52-53`) or 15 s
+- **There is no hold in the code, and that is accepted (2026-11-03).** PLAN.md:102 and PLAN.md:368 describe
+  `ROLLBACK_HOLD` (10 min in Jenkins), but no script reads it (`grep ROLLBACK_HOLD scripts/`: no hits).
+  - Default path: the old color is scaled to 0 right after the drain, 60 s shared (`switch-shared.sh:51-57`) or 15 s
     lossy (`switch-lossy.sh:59,70`). After that, `rollback.sh` refuses: the default path has **no rollback window**.
-  - With `KEEP_OLD=true` (`switch-shared.sh:49-51`, `switch-lossy.sh:67-69`; only the `*-rollback` drill cases set
-    it, `scripts/demo.sh:79-80`), the old color stays up indefinitely until someone runs `rollback.sh`. Nothing
-    scales it down later.
-- **Rec**: implement the hold as code: keep the old color for `ROLLBACK_HOLD`, then scale it down in a separate,
-  logged pipeline stage. Make that stage the point of no return in the runbook.
+  - With `KEEP_OLD=true` (`switch-shared.sh:51-52`, `switch-lossy.sh:67-69`; only the `*-rollback` drill cases set
+    it, `scripts/demo.sh:79-80`), the old color stays up until someone runs `rollback.sh`. Nothing scales it down.
+- **Decision**: accepted, not built. A deployment that needs a window uses `KEEP_OLD=true` and treats the scale-down
+  as its own logged runbook step; the demo's default path deliberately has no window, and the drill cases hold the
+  old color explicitly.
 
 **Data-loss semantics in production (lossy rollback)**
 - Everything in the table in 2.3 applies again, now for the whole hold period, not a minute-long window.
@@ -554,12 +560,14 @@ the team would still need this repo's approach.
   `userProfileEnabled: true` is set [verified] (wl:slice1b-2; `config/online/10-user-profile.json:4`).
 - **Version skew**: config-cli for 26 is built against Keycloak 26.5.5 (`scripts/lib/kc.sh:118`) and runs against
   26.8.1. Fields it does not know are dropped silently (PLAN.md:128-130).
-- **The dropped-field check is not a gate.** `scripts/check-config.sh` exists and caught the userProfile bug, but
-  no script, Jenkinsfile or job calls it (grep for `check-config` outside the script itself: no hits).
+- **The dropped-field check is a gate.** `scripts/check-config.sh` caught the userProfile bug, and `config.sh:65` runs
+  it after every stage (`check-config.sh <stage> <color>`, straight to the color's own Service), so a field
+  config-cli silently drops fails the run. The pipeline inherits it through `config.sh`.
 
 **Rec**
-1. **Wire `check-config.sh <stage>` after every `config.sh <stage>`**, in the pipeline and in `switch-*.sh`. Fail
-   the build on any dropped field. Add a negative control fixture (the slice6b worklog shows one).
+1. **Done**: `check-config.sh` runs after every `config.sh` stage (`config.sh:65`). The remaining piece is a
+   negative-control fixture that proves it fails on a dropped field (the slice6b worklog shows one); not built,
+   accepted.
 2. **Change process**: config PRs reviewed like code. CI runs, against an ephemeral Keycloak of the *target*
    version:
    - config-cli `import.validate`
@@ -681,13 +689,17 @@ the team would still need this repo's approach.
 
 Findings and fixes come from the security pipeline (wl:security-pipelines, wl:security-fixes).
 
-**Open decisions**
+**Decisions (accepted 2026-11-03)**
+
+The user accepted the items below as-is for the demo on 2026-11-03: each stays a production blocker to schedule, none
+blocks the demo. They are recorded here so the security pipeline's FAIL/WARN is an explained state, not an open
+question.
 
 | Item | State | Rec |
 |---|---|---|
-| Admin console + REST public on the login hosts | WARN by design (`scripts/security/probe-admin.sh:90-104`, `EXPECT_ADMIN_PUBLIC=true`) | Do not expose `/admin/` and `/realms/master/` publicly ([reverse proxy guide](https://www.keycloak.org/server/reverseproxy)). Use `hostname-admin` on an internal-only host/gateway; then flip `EXPECT_ADMIN_PUBLIC=false` |
-| CSP without `default-src` | ZAP WARN (wl:security-pipelines) | Set the realm's CSP header (realm security defenses) with `default-src 'self'` plus what the theme needs; test the login and account pages |
-| guava CVE in Keycloak libs | trivy FAIL, fix 33.7.2 | Time-boxed exception; upgrade on the Keycloak patch that bumps it; confirm reachability with upstream advisories |
+| Admin console + REST public on the login hosts | WARN by design (`scripts/security/probe-admin.sh:90-104`, `EXPECT_ADMIN_PUBLIC=true`) — **accepted** | Do not expose `/admin/` and `/realms/master/` publicly ([reverse proxy guide](https://www.keycloak.org/server/reverseproxy)). Use `hostname-admin` on an internal-only host/gateway; then flip `EXPECT_ADMIN_PUBLIC=false` |
+| CSP without `default-src` | ZAP WARN (wl:security-pipelines) — **accepted** | Set the realm's CSP header (realm security defenses) with `default-src 'self'` plus what the theme needs; test the login and account pages |
+| guava CVE in Keycloak libs | trivy FAIL (CVE-2026-102554, guava 33.6.0, fix 33.7.2) — **accepted** | Time-boxed exception; upgrade on the Keycloak patch that bumps it; confirm reachability with upstream advisories |
 | Brute force | fixed (on in master + demo) | Keep; note the reset across lossy windows (2.3) |
 
 **`hostname-strict=false` and issuer forgery**
@@ -780,8 +792,8 @@ older than X.
 | Scenario | Demo | Production |
 |---|---|---|
 | Pod kill (graceful) | Gated in the patch case (`switch-shared.sh:33-45`) | Same |
-| AZ loss | Planned as step 6z "reported, not gated" (PLAN.md:332-339), **not implemented** | Expect: Keycloak keeps 2 of 3 pods (PDB); CNPG with `ANY 1` keeps quorum; in-flight POSTs on the lost zone fail (502). Drill it in staging with a real zone failure (cordon + node stop) |
-| DB primary loss | Not run | CNPG/managed failover; Keycloak reconnects; `stateless` clears local caches after reconnect (concepts page). Drill |
+| AZ loss | Planned as step 6z "reported, not gated" (PLAN.md:332-339), **not implemented — accepted 2026-11-03** | Expect: Keycloak keeps 2 of 3 pods (PDB); CNPG with `ANY 1` keeps quorum; in-flight POSTs on the lost zone fail (502). Drill it in staging with a real zone failure (cordon + node stop) |
+| DB primary loss | Not run — accepted 2026-11-03 | CNPG/managed failover; Keycloak reconnects; `stateless` clears local caches after reconnect (concepts page). Drill |
 | Region loss | Out of scope | Multi-cluster v2 is single-region. Region DR = restore from backups in another region + DNS failover; RPO = WAL archive lag, RTO = restore + start. Decide whether that is acceptable for the org IdP |
 
 **Chaos testing**: start with the drills above in staging, scheduled monthly:
@@ -862,10 +874,10 @@ T-shirt sizes: S <= 1 week, M 2-4 weeks, L 1-2 months, XL > 2 months, for one en
 
 | Item | Size | Proves |
 |---|---|---|
-| Live `minor`, `major`, `minor-rollback` gate runs; record `lossy_seconds`, `sessions_lost`, `resurrection_seconds` and the cross-major refresh result | M | Lossy mechanism works at all |
-| Finish the `patch-rollback` gate run | S | Shared rollback |
-| Implement `ROLLBACK_HOLD` (keep the old color N minutes, then scale down in its own logged step) | S | A rollback window exists on the default path |
-| Wire `check-config.sh` after every `config.sh` | S | Config drop protection |
+| Live `minor`, `major`, `minor-rollback` gate runs; record `lossy_seconds`, `sessions_lost`, `resurrection_seconds` and the cross-major refresh result | M | Lossy mechanism works at all — **done 2026-11-03** (builds #35-#37 PASS) |
+| Finish the `patch-rollback` gate run | S | Shared rollback — **done** (build #34 PASS) |
+| Implement `ROLLBACK_HOLD` (keep the old color N minutes, then scale down in its own logged step) | S | A rollback window exists on the default path — **accepted, not built** (section 2.4; `KEEP_OLD=true` is the operator path) |
+| Wire `check-config.sh` after every `config.sh` | S | Config drop protection — **done** (`config.sh:65`) |
 | `replay.sh`: fail on non-404 errors, detect pod replacement (pod `creationTimestamp > since`), check listener enabled | S | Replay honesty |
 | Negative control (no `stateless`) and zone-loss step 6z | S-M | Gate can tell failure apart; zone behaviour |
 | Test realm with `revokeRefreshToken=true` and an `offline_access` client through a lossy switch | S | The two biggest Opens |

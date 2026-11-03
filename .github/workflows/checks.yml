@@ -1,0 +1,37 @@
+name: checks
+
+# Offline checks only: the live cases need Docker, KinD and ~16 GB, and run through Jenkins locally.
+# These are the same commands the worklogs list as the pre-commit set (offline, no cluster).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  offline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq shellcheck
+
+      - name: shellcheck every script
+        run: shellcheck -x scripts/*.sh scripts/lib/kc.sh scripts/security/*.sh
+
+      - name: lib helpers (profiles, events, image tags, exec bits)
+        run: bash scripts/test-lib.sh
+
+      - name: demo phase headers
+        run: bash scripts/test-demo.sh
+
+      - name: gate fixtures
+        run: bash scripts/test-gate.sh
+
+      - name: report over gate fixtures
+        run: bash scripts/test-report.sh

@@ -21,6 +21,25 @@ Why lossy for minor/major: two Keycloak versions cannot share one database (the 
 strictly lossless cutover would need a write freeze. Because users authenticate at the legacy IdP, a lost Keycloak
 session costs a redirect, not a password prompt; the demo makes that trade explicit and measures it.
 
+## Topology
+
+```mermaid
+flowchart LR
+  U["browser + k6 (18 logins/s)"] --> E["ingress-nginx<br/>*.localtest.me"]
+  E --> S["kc-active Service<br/>(the only thing the cutover patches)"]
+  S --> B["Keycloak blue<br/>3 pods"]
+  S --> G["Keycloak green<br/>3 pods"]
+  B --> DB[("PostgreSQL<br/>CNPG, sync replica")]
+  G --> DB
+  B --> L["legacy IdP<br/>Spring Authorization Server"]
+  G --> L
+  A["testclient / testresource"] --> E
+```
+
+One Service selector routes the edge to exactly one color; the flip is a `kubectl patch` of that selector, so neither
+the clients, the ingress nor the realm configuration change. Blue and green share a database in `patch` and have one
+each in `minor`/`major` (green gets a replica of blue's, promoted at the copy point).
+
 ## Run it
 
 Requirements: Docker with about 16 GB for the containers (measured peak 13.6 GiB, see Results; the laptop profile
@@ -69,8 +88,8 @@ Then run cases with `PROFILE=laptop` (Jenkins build parameter, or
 a run with a different `PROFILE` stops before it changes anything.
 
 Laptop = 2 KinD workers (zones a, b) instead of 3, 2 Keycloak pods per color instead of 3 (PDB 1 of 2, 1 GiB memory
-limit), 2 Postgres instances per cluster instead of 3 (synchronous replication kept), 2 logins/s instead of 5,
-3 app VUs instead of 6, 2 ingress-nginx workers. Same images, config stages, switch scripts and gate rules.
+limit), 2 Postgres instances per cluster instead of 3 (synchronous replication kept), 6 logins/s instead of 18,
+8 app VUs instead of 22, 2 ingress-nginx workers. Same images, config stages, switch scripts and gate rules.
 
 Measured over all five cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with Jenkins
 (rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The default profile peaks at
@@ -93,8 +112,8 @@ the production PDB of 2 out of 3. Latency numbers are comparable within a run, n
 ## Results
 
 Final run: Jenkins builds #33-#37, default profile, one fresh cluster, commit `f3d94e3` (latency rows re-judged with
-`461bb41`, which unified the gate's and the report's cutover windows; no verdict changed). Load throughout: 5 brokered
-logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 6 app VUs through the two test apps.
+`461bb41`, which unified the gate's and the report's cutover windows; no verdict changed). Load throughout: 18 brokered
+logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 22 app VUs through the two test apps.
 Every gate PASSes.
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
@@ -140,3 +159,5 @@ The full numbers, per failure mode and per step class, are in the report (one ta
 - [docs/test-apps.md](docs/test-apps.md): the OIDC test client and resource server (Spring Boot, GraalVM native).
 - Security pipelines: Jenkins jobs **kc-kcwarden** (realm configuration audit) and **kc-security** (probes: TLS,
   tokens, redirect URIs, brute force, DCR, issuer, network policy, trivy, nuclei, ZAP, ...).
+- Apache-2.0: [LICENSE](LICENSE). CI runs the offline checks (shellcheck, gate/report/lib tests) on every push
+  (`.github/workflows/checks.yml`); the live cases need Docker and run through the local Jenkins.
