@@ -26,15 +26,59 @@ kube_connect
 '''
       }
     }
-    stage('Reset') { steps { script { phase('reset') } } }
-    stage('Install') { steps { script { phase('install') } } }
-    stage('Load + warm-up') { steps { script { phase('warmup') } } }
-    stage('Switch') { steps { script { phase('switch') } } }
-    stage('Soak + rollback') {
-      when { expression { env.CASE.endsWith('-rollback') } }
-      steps { script { phase('rollback') } }
+    stage('Reset') {
+      steps {
+        script {
+          phase('reset')
+          // sentinels of the parallel Load/Cutover branches (a previous failed build can leave them behind)
+          sh 'rm -f out/.warm-done out/.cutover-done out/.cutover-failed'
+        }
+      }
     }
-    stage('Cool-down') { steps { script { phase('cooldown') } } }
+    stage('Install') { steps { script { phase('install') } } }
+    // The load is its own branch for the whole run: it starts k6, warms up, waits for the cutover to finish and then
+    // cools down and collects. Pipeline steps never wait on the load; the only ordering point is the warm-up (the
+    // switch starts once out/.warm-done exists, so sessions exist before the flip).
+    stage('Load || Cutover') {
+      parallel {
+        stage('Load') {
+          steps {
+            script {
+              phase('warmup')
+              sh 'mkdir -p out && touch out/.warm-done'
+              sh '''#!/usr/bin/env bash
+set -euo pipefail
+for _ in $(seq 900); do
+  [[ -f out/.cutover-done || -f out/.cutover-failed ]] && break
+  sleep 2
+done
+[[ -f out/.cutover-done ]]
+'''
+              phase('cooldown')
+            }
+          }
+        }
+        stage('Cutover') {
+          steps {
+            script {
+              sh '''#!/usr/bin/env bash
+set -euo pipefail
+for _ in $(seq 300); do [[ -f out/.warm-done ]] && break; sleep 2; done
+[[ -f out/.warm-done ]]
+'''
+              try {
+                phase('switch')
+                if (env.CASE.endsWith('-rollback')) { phase('rollback') }
+              } catch (e) {
+                sh 'mkdir -p out && touch out/.cutover-failed || true'
+                throw e
+              }
+              sh 'touch out/.cutover-done'
+            }
+          }
+        }
+      }
+    }
     stage('Gate') { steps { script { phase('gate') } } }
   }
   post {

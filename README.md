@@ -64,7 +64,9 @@ docker compose up -d jenkins
    CloudNativePG, certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps, and a first
    blue Keycloak. Idempotent; the first run builds images and takes a while.
 3. Jenkins: <http://localhost:8081>, user `admin`, password from step 1. Job **kc-bluegreen**, parameter `CASE`.
-   One stage per phase: Reset, Install, Load + warm-up, Switch, Soak + rollback, Cool-down, Gate. Each phase logs a
+   Reset and Install run first; then two parallel branches — **Load** (k6 start, warm-up, cool-down) and **Cutover**
+   (Switch, Soak + rollback) — joined by **Gate**. The load branch owns k6 for the whole run, so no pipeline step ever
+   waits on the load; the one ordering point is the warm-up (the switch starts once sessions exist). Each phase logs a
    header saying what it does and why, and a result line with exit code and duration. The HTML report is built in
    every build's post step and archived with `out/**`.
 

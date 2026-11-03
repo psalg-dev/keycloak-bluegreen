@@ -24,12 +24,17 @@ spec:
               valueFrom: { secretKeyRef: { name: legacy-idp, key: user-password } }
             - name: LEGACY_CLIENT_SECRET
               valueFrom: { secretKeyRef: { name: legacy-idp, key: client-secret } }
+            # 768Mi OOM-killed the JVM at 18 logins/s (build #40: exit 137 at 11:05:15Z, ~350 concurrent login
+            # forms -> 200 Tomcat threads x 1Mi stacks); the pod restarted and its 503s failed 5 gate rules.
+            # Heap stays at 65% of the new limit, thread stacks are halved, so the stand-in keeps up.
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=65 -Xss512k
           readinessProbe:
             httpGet: { path: /.well-known/openid-configuration, port: http }
             periodSeconds: 5
           resources:
-            requests: { cpu: 250m, memory: 512Mi }
-            limits: { memory: 768Mi }
+            requests: { cpu: 250m, memory: 768Mi }
+            limits: { memory: 1536Mi }
 ---
 apiVersion: v1
 kind: Service
