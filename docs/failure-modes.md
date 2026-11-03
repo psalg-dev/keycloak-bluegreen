@@ -30,7 +30,8 @@ test apps (once built) log one JSON line per login/call/refresh/logout/introspec
 **Time.** All times are seconds relative to the first `switch` event (t = 0). k6 and the scripts share the host
 clock (KinD containers on one machine). A request belongs to the moment it started (`t_start`).
 
-**Windows** (report and `latency_regression`; the shaded band in every time chart):
+**Windows** (report, the gate's `latency_*` rows and `latency_regression`; the shaded band in every time chart; one
+definition, `$W` in `scripts/gate/apps.jq`, half-open):
 
 | window | definition |
 |---|---|
@@ -280,7 +281,8 @@ that every rule a mode names has the same state as the gate.txt row, and that ov
   samples. Count = classes over 2x; attempts = classes with enough samples. The ratios are listed in the table.
 - **Causes**: cold caches on the new color, the killed pod's share moving to two pods, DB load (`stateless` roughly
   doubles it), schema migration on the copy (lossy), CPU contention on the one test machine.
-- **Expected**: 0 classes. **Enforced**: report only (the gate has no latency rule).
+- **Expected**: 0 classes. **Enforced**: report only. The gate prints the same list as an INFO row (one definition,
+  `regress` in `scripts/gate/apps.jq`; `test-report.sh` checks the counts agree).
 - **Blind spots**: one machine, so contention from the second color's startup shows up as regression; the cutover
   window is short (tens of seconds), so p95 rests on few samples for low-rate classes. Read it with the per-class
   CDF and the percentile table.

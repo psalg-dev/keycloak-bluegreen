@@ -13,11 +13,6 @@ def r($d): if . == null then null else (. * $d | round) / $d end;
 def pct($p): if length == 0 then null else .[([((length * $p) | ceil) - 1, 0] | max)] end;
 def stats: sort | {n: length, p50: pct(0.5), p90: pct(0.9), p95: pct(0.95), p99: pct(0.99), max: .[-1]} | map_values(r(10));
 def hop: .step | (startswith("login_") or startswith("app_login_"));
-def sclass: .step as $s
-  | if ($s | startswith("app_login_")) or (($s | startswith("login_")) and $s != "login_token") then "login_hop"
-    elif $s == "login_token" then "token" elif $s == "refresh" then "refresh"
-    elif $s == "logout" or $s == "logout_probe" then "logout" elif $s == "discovery" or $s == "jwks" then "reads"
-    elif ($s | startswith("app_")) then "app_call" else "other" end;
 # failure class of one k6 line for the error chart (null = fine). logout_probe must get invalid_grant: that is success.
 def cls:
   if .status == 0 then "net_error" elif .status >= 500 then "http_5xx"
@@ -35,12 +30,9 @@ def cls:
 | ($sw // $tmin) as $T0
 | ($ls // $tmax) as $end
 | def rel: if . == null then null else (. - $T0) | r(10) end;
-  def after($t; $n): [$e[] | select(.event == $n) | .t | ts | select(. >= $t)] | min;
-# Cutover windows (shaded, and the "cutover" latency distribution): forward = [copy_point // switch, window_end //
-# recovered // drained // +60 s]; rollback = [rollback_start, rollback_window_end // drained // +60 s].
-  ([ if $sw != null then [($cp // $sw), (after($sw; "window_end") // after($sw; "recovered") // after($sw; "drained") // ($sw + 60))] else empty end,
-     ($rbs // $rb) as $r0 | if $r0 != null then [$r0, (after($r0; "rollback_window_end") // after($r0; "drained") // ($r0 + 60))] else empty end ]) as $W
-| def phase($t): if $W == [] or $t < $W[0][0] then "pre" elif any($W[]; $t >= .[0] and $t < .[1]) then "cut" else "post" end;
+# Cutover windows $W (shaded, and the "cutover" latency distribution) and phase: scripts/gate/apps.jq, shared with
+# the gate. The report has no "mid": between two windows counts as post.
+  def phase($t): $t | phase | if . == "mid" then "post" else . end;
   def inw($lo; $hi): . != null and $lo != null and $hi != null and . >= $lo and . <= $hi;
 
 # --- app lines (testclient / testresource, contract schema); [] until the apps exist
@@ -123,7 +115,7 @@ def cls:
    | {x: ($f.x + $r.x), b: ($f.b + $r.b), bu: [$f.b[] | select($cp != null and .[0].ts < $cp)]}) as $infl
 
 # --- latency: per step class, the 3 windows (CDF bins: 10 per decade of ms) and 10 s buckets of p50/p95/p99
-| ([$L[] | {c: sclass, ts, ms: ((.te - .ts) * 1000)}]
+| ([$L[] | select(.status != 0) | {c: sclass, ts, ms: ((.te - .ts) * 1000)}]   # as regress: a net error has no latency
    + [$intro[] | select(.latency_ms != null) | {c: "introspection", ts, ms: .latency_ms}]) as $lat
 | (reduce ($lat | group_by(.c))[] as $g ({}; . + {($g[0].c): (
      ($g | map(. + {p: phase(.ts)}) | group_by(.p) | map({key: .[0].p, value: ((map(.ms) | stats)
@@ -135,8 +127,7 @@ def cls:
     | {p50: [$r[] | ($m[.] // []) | pct(0.5) | r(10)], p95: [$r[] | ($m[.] // []) | pct(0.95) | r(10)], p99: [$r[] | ($m[.] // []) | pct(0.99) | r(10)]};
   (if $lbs == [] then null
    else {B: $LB, x0: (($lbs | min) * $LB), cls: (reduce ($lat | group_by(.c))[] as $g ({}; . + {($g[0].c): ($g | lseries)}))} end) as $latseries
-| ([$dist | to_entries[] | select((.value.pre.n // 0) >= 20 and (.value.cut.n // 0) >= 10)
-    | {c: .key, pre: .value.pre.p95, cut: .value.cut.p95, ratio: ((.value.cut.p95 / ([.value.pre.p95, 0.1] | max)) | r(100))}]) as $lr
+| regress as $lr   # the gate's latency_regression classes (scripts/gate/apps.jq)
 
 # --- error/request rate series, 2 s buckets: k6 line classes + app failures
 | 2 as $B

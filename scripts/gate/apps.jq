@@ -19,6 +19,13 @@
   | . + {done: (.after[0].ts)})) as $S
 | ($S | map(select(.sid != null) | {key: .sid, value: .}) | from_entries) as $bysid
 | ([$A[].ts] | min) as $a0 | ([$A[].ts] | max) as $a1
+# Cutover windows, ONE definition for the gate's latency rows and the report (shaded band, "cutover" distribution,
+# latency_regression; docs/failure-modes.md "Windows"): forward = [copy_point // switch, window_end // recovered //
+# drained // +60 s]; rollback = [rollback_start // rollback, rollback_window_end // drained // +60 s]. Half-open.
+# Bound once: phase runs per sample.
+| def after($t; $n): [$e[] | select(.event == $n) | .t | ts | select(. >= $t)] | min;
+  [ if $sw != null then [($cp // $sw), (after($sw; "window_end") // after($sw; "recovered") // after($sw; "drained") // ($sw + 60))] else empty end,
+    ($rbs // $rb) as $r0 | if $r0 != null then [$r0, (after($r0; "rollback_window_end") // after($r0; "drained") // ($r0 + 60))] else empty end ] as $W
 | def sborn: $bysid[.sid // ""].born;
 def line($step): .lines | map(select(.step == $step))[0];
 def appcalls: .step | startswith("app_call_");
@@ -117,13 +124,10 @@ def r_logout_effective: logouts_judged as $all
   | if $all == [] then skip("no completed app logouts") else
     verdict($me == [] and $c == []; "\($all | n) app logouts (\($all | map(select(.ini == "kc")) | n) Keycloak-initiated), \($me | n) with /me != 401 after, \($c | n) successful calls after the logout, \($x | n) excused (Keycloak-initiated on a session lost in the window: Keycloak did not know it)") + {bad: ($me + $c)} end;
 
-# Latency per step class: pre / cutover window(s) / post. Windows: shared [switch-30 s, switch+30 s] (+ the same
-# around rollback); lossy [copy_point, replay_done] (+ [rollback_start, rollback_replay_done]). Between two windows = "mid".
-def wins: [(if $base == "lossy" then [$cp, $rd] elif $sw != null then [$sw - 30, $sw + 30] else empty end),
-    (if $mode == "lossy-rollback" then [$rbs, $rrd] elif $mode == "shared-rollback" and $rb != null then [$rb - 30, $rb + 30] else empty end)]
-  | map(select(all(.[]; . != null)));
-def phase: . as $t | wins as $w | if $w == [] then "pre" elif any($w[]; $t >= .[0] and $t <= .[1]) then "cut"
-  elif $t < $w[0][0] then "pre" elif $t > $w[-1][1] then "post" else "mid" end;
+# Latency per step class: pre / cutover window(s) ($W, bound at the top) / post. Between two windows = "mid".
+def wins: $W;
+def phase: . as $t | if $W == [] or $t < $W[0][0] then "pre" elif any($W[]; $t >= .[0] and $t < .[1]) then "cut"
+  elif $t >= $W[-1][1] then "post" else "mid" end;
 def samples($c): if $c == "introspection" then [$A[] | select(.event == "introspection" and .latency_ms != null) | {ts, ms: .latency_ms}]
   else [$L[] | select(.status != 0 and (if $c == "login" then (.step | test("^(app_)?login_")) and .step != "login_token"
     elif $c == "token" then .step == "login_token" else .step == $c end)) | {ts, ms: ((.te - .ts) * 1000)}] end;
@@ -132,8 +136,19 @@ def p95($c; $ph): [samples($c)[] | select(.ts | phase == $ph) | .ms] | if n == 0
 def lat($c): samples($c) as $s | if $s == [] then skip("no samples") else
   info(["pre", "cut"] + (if (wins | n) > 1 then ["mid"] else [] end) + ["post"] | map(. as $ph | [$s[] | select(.ts | phase == $ph) | .ms]
     | "\($ph) " + if n == 0 then "n=0" else "n=\(n) p50/95/99=\(pct(0.5) | round)/\(pct(0.95) | round)/\(pct(0.99) | round)ms" end) | join(" | ")) end;
+# latency_regression, shared with the report's failure-mode row: report classes (sclass + testresource introspection),
+# p95 cutover vs pre, judged only with >= 20 pre and >= 10 cutover samples (docs/failure-modes.md).
+def sclass: .step as $s
+  | if ($s | startswith("app_login_")) or (($s | startswith("login_")) and $s != "login_token") then "login_hop"
+    elif $s == "login_token" then "token" elif $s == "refresh" then "refresh"
+    elif $s == "logout" or $s == "logout_probe" then "logout" elif $s == "discovery" or $s == "jwks" then "reads"
+    elif ($s | startswith("app_")) then "app_call" else "other" end;
+def regress: [([$L[] | select(.status != 0) | {c: sclass, ts, ms: ((.te - .ts) * 1000)}]
+    + [$A[] | select(.event == "introspection" and .latency_ms != null) | {c: "introspection", ts, ms: .latency_ms}])
+  | group_by(.c)[] | {c: .[0].c, pre: [.[] | select(.ts | phase == "pre") | .ms], cut: [.[] | select(.ts | phase == "cut") | .ms]}
+  | select((.pre | n) >= 20 and (.cut | n) >= 10)
+  | {c, pre: (.pre | pct(0.95)), cut: (.cut | pct(0.95))} | . + {ratio: (.cut / ([.pre, 0.1] | max) * 100 | round / 100)}];
 def r_latency_regression: if wins == [] then skip("no cutover window") else
-  ["login", "token", "refresh", "app_call_jwt", "app_call_introspect", "introspection"]
-  | map(. as $c | {c: ., pre: p95($c; "pre"), cut: p95($c; "cut")} | select(.pre != null and .cut != null and .pre > 0 and .cut > 2 * .pre))
-  | info(if . == [] then "none (no step class with cutover p95 > 2x pre-switch p95)"
-    else map("\(.c) p95 \(.pre | round) -> \(.cut | round) ms (\(.cut / .pre * 10 | round / 10)x)") | join(", ") end) end;
+  regress | [.[] | select(.ratio > 2)] as $o
+  | info(if $o == [] then "none of \(n) step classes has cutover p95 > 2x pre-switch p95"
+    else ($o | map("\(.c) p95 \(.pre | round) -> \(.cut | round) ms (\(.ratio)x)") | join(", ")) + " (\($o | n) of \(n) step classes)" end) end;

@@ -66,7 +66,11 @@ check "every rule a mode names is a gate row with the same state" data '[.cases[
 check "a mode is over bound only if a gate rule it names FAILed" data '[.cases[].modes[] | select(.verdict == "fail") | any(.own[]; .state == "FAIL")] | all'
 check "every FAILed rule a mode names puts such a mode over bound" data '[.cases[] | .modes as $m | ([$m[].own[].rule] | unique) as $named
   | .gate.rules[] | select(.state == "FAIL" and (.rule | IN($named[]))) | .rule as $r | any($m[]; (.rules | index($r)) != null and (.verdict == "fail" or .verdict == "nodata"))] | all'
-check "fixtures exercise it: the major case has over-bound modes" data '[.cases[] | select(.case == "major") | .modes[] | select(.verdict == "fail")] | length >= 3'
+check "latency_regression: the report's count = the classes the gate's INFO row lists (one definition, apps.jq)" data '[.cases[]
+  | ([.gate.rules[] | select(.rule == "latency_regression" and .state == "INFO") | .detail] | .[0]) as $d
+  | ([.modes[] | select(.id == "latency_regression") | .count] | .[0]) as $c
+  | $d == null or (if ($d | startswith("none")) then $c == 0 else ($d | capture("\\((?<k>[0-9]+) of ").k | tonumber) == $c end)] | all'
+[[ -n ${1:-} ]] || check "fixtures exercise it: the major case has over-bound modes" data '[.cases[] | select(.case == "major") | .modes[] | select(.verdict == "fail")] | length >= 3'
 check "found_session false on app-initiated fc logouts is no failure (patch)" data '.cases[] | select(.case == "patch") | .modes[] | select(.id == "frontchannel_failed") | .verdict == "ok"'
 check "excused lossy logouts are expected, not over bound (minor)" data '.cases[] | select(.case == "minor") | [.modes[] | select(.id == "backchannel_missing" or .id == "frontchannel_failed" or .id == "logout_not_effective") | .verdict] | all(. == "expected")'
 }
