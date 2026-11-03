@@ -50,6 +50,7 @@ if [[ ${KEEP_OLD:-false} == true ]]; then
   log "switched $active -> $idle; kc-$active kept running for rollback"; exit 0
 fi
 sleep "${DRAIN_SECONDS:-60}"
+save_logs "$active"
 kubectl -n "$NS" scale sts "kc-$active-keycloak" --replicas=0 >/dev/null
 event drained color="$active"
 log "switched $active -> $idle ($from -> $target, provider v$provider, db $db)"

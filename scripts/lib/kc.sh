@@ -122,6 +122,16 @@ set_active() {
 
 state() { kubectl -n "$NS" get configmap kc-state -o "jsonpath={.data.$1}"; }
 
+# save_logs <color>: that color's Keycloak logs (every pod) to out/kc-<color>.log, before a scale-down deletes them:
+# the only evidence behind a 5xx the gate counts (build #11: three 500s on blue, unexplained once blue was gone).
+save_logs() {
+  local p; : > "out/kc-$1.log"
+  for p in $(kubectl -n "$NS" get pods -l "app.kubernetes.io/instance=kc-$1" -o name); do
+    kubectl -n "$NS" logs "$p" -c keycloak --prefix --timestamps >> "out/kc-$1.log" 2>/dev/null || true
+  done
+  log "saved kc-$1 logs -> out/kc-$1.log ($(grep -c ' ERROR ' "out/kc-$1.log" || true) ERROR lines)"
+}
+
 # cli_tag <kc_version>: keycloak-config-cli image tag built against the same Keycloak major
 cli_tag() { case $1 in 25.*) echo 6.5.1-25 ;; 26.*) echo 6.5.1-26.5.5 ;; *) die "no config-cli for Keycloak $1" ;; esac; }
 

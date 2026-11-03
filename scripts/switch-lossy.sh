@@ -75,6 +75,7 @@ event window_end
 if [[ ${KEEP_OLD:-false} == true ]]; then
   log "switched $active -> $idle ($src -> $new); kc-$active on $src kept running for rollback"; exit 0
 fi
+save_logs "$active"
 kubectl -n "$NS" scale sts "kc-$active-keycloak" --replicas=0 >/dev/null
 event drained color="$active"
 log "switched $active -> $idle ($from -> $target, $src -> $new), changesets $before -> $after"

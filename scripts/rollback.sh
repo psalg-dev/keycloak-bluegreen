@@ -36,6 +36,7 @@ else
 fi
 
 sleep "${DRAIN_SECONDS:-15}"
+save_logs "$cur"
 kubectl -n "$NS" scale sts "kc-$cur-keycloak" --replicas=0 >/dev/null
 event drained color="$cur"
 log "rolled back $cur -> $old ($curv on $curdb -> $oldv on $olddb)"

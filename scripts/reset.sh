@@ -13,6 +13,6 @@ kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null
 kubectl -n "$NS" delete job -l app=config-cli --ignore-not-found >/dev/null
 delete_dbs
 kubectl -n "$NS" delete configmap kc-state --ignore-not-found >/dev/null
-rm -f out/events.jsonl out/k6.jsonl
+rm -f out/events.jsonl out/k6.jsonl out/apps.jsonl out/kc-*.log
 create_db pg-1
 log "reset: no Keycloak, fresh pg-1"

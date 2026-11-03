@@ -94,8 +94,12 @@ run_body() {
       wait_progress "${COOLDOWN_SECONDS:-90}" cool-down # lossy: probes must run well after replay_done
       scripts/load.sh stop
       mkdir -p "out/$what"
-      mv out/events.jsonl out/k6.jsonl "out/$what/" ;;
-    gate) scripts/gate.sh "$mech" "out/$what/k6.jsonl" "out/$what/events.jsonl" | tee "out/$what/gate.txt" ;;
+      save_logs "$(state activeColor)"
+      mv out/events.jsonl out/k6.jsonl "out/$what/"
+      mv out/kc-*.log out/apps.jsonl "out/$what/" 2>/dev/null || true ;; # apps.jsonl: none without ns apps
+    gate)
+      apps=(); [[ ! -s out/$what/apps.jsonl ]] || apps=("out/$what/apps.jsonl")
+      scripts/gate.sh "$mech" "out/$what/k6.jsonl" "out/$what/events.jsonl" "${apps[@]}" | tee "out/$what/gate.txt" ;;
     *) die "unknown phase '$1' (${phases[*]})" ;;
   esac
 }

@@ -1,5 +1,6 @@
 # rule<TAB>why it matters (printed under each gate row). One line per rule; add a line when you add a rule.
 has_lines	no k6 data means nothing was measured; every other PASS would be meaningless
+load_through_cutover	a cutover without traffic proves nothing: every other rule would pass on silence (k6 must not stop or stall around the switch)
 issuer_stable	relying parties pin the issuer; a token whose iss differs from its network's issuer is rejected (or worse, accepted from a forged host)
 no_5xx	any 5xx or dropped connection during the deployment is downtime that a user or an app actually sees
 reads_ok	resource servers fetch discovery + JWKS to validate tokens; if these fail, every API call in the estate starts failing
@@ -48,3 +49,4 @@ latency_app_call_jwt	end-to-end latency of an app's API call with a locally vali
 latency_app_call_introspect	end-to-end latency of an app's API call validated by introspection: every such call waits on Keycloak, so a slow Keycloak slows the app
 latency_introspection	Keycloak's introspection latency as the resource server sees it: the direct cost of the cutover on every introspecting API
 latency_regression	step classes whose p95 during the cutover is more than twice their pre-switch p95: where users feel the deployment even without errors
+window_exercised	proves the lossy window really happened: a session made on the old version after the copy is unknown to the new one (else the lossy rules passed on no data, or the new DB saw writes it should not)

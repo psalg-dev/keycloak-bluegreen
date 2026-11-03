@@ -55,6 +55,9 @@ base=${mode%-rollback}
 [[ -f $apps || $apps == /dev/null ]] || { log "no apps file '$apps': treating as empty"; apps=/dev/null; }
 # ponytail: probes this soon after replay_done may still hit a pod whose session cache is ~100 ms stale (stateless outbox).
 GRACE=${GATE_GRACE_SECONDS:-1}
+# Live k6 sends ~60 requests/s; a longer silence around the cutover means k6 died or everything stalled.
+# The synthetic fixtures are sparse, so test-gate.sh raises it for them.
+MAX_GAP=${GATE_MAX_GAP_SECONDS:-5}
 
 # Shared jq prelude: $L = k6 lines with numeric ts/te (epoch s), event times, session birth times.
 # shellcheck disable=SC2016 # jq variables, not shell
@@ -107,7 +110,7 @@ why() {
 # rule <name> <jq expr yielding {r, d, bad?}>
 rule() {
   local out head r
-  out=$(jq -nr --slurpfile k "$k6" --slurpfile e "$ev" --slurpfile a "$apps" --argjson grace "$GRACE" --arg mode "$mode" \
+  out=$(jq -nr --slurpfile k "$k6" --slurpfile e "$ev" --slurpfile a "$apps" --argjson grace "$GRACE" --argjson maxgap "$MAX_GAP" --arg mode "$mode" \
     "$PRE ($2) | \"\(.r)\t\(.d)\", ((.bad // [])[:5][] | del(.ts, .te) | tojson)")
   head=${out%%$'\n'*} r=${head%%$'\t'*}
   printf '%-32s %-5s %s\n' "$1" "$r" "${head#*$'\t'}"
@@ -124,6 +127,12 @@ printf '%-32s %-5s %s\n' RULE STATE DETAIL
 # shellcheck disable=SC2016
 {
 rule has_lines 'verdict($L | n > 0; "\($L | n) k6 lines")'
+# Build #11: k6 hit its DURATION mid-switch, so the cutover ran without load and most rules had nothing to judge.
+rule load_through_cutover 'if $sw == null then skip("no switch event") else
+  (($cp // $sw) - 30) as $lo | ([$sw, $rd, $rb, $rrd] | map(select(. != null)) | max + 30) as $hi
+  | ([$lo] + [$L[] | .ts | select(. >= $lo and . <= $hi)] + [$hi] | sort) as $t
+  | ([range(1; $t | n) as $i | $t[$i] - $t[$i - 1]] | max) as $gap
+  | verdict($gap <= $maxgap; "longest gap between k6 requests from \(if $cp then "copy_point" else "switch" end)-30s to the last switch event+30s: \($gap | secs)s (max \($maxgap))") end'
 rule issuer_stable '[$L[] | select(.iss != null)] as $a
   | [$a[] | select(.iss != "https://kc-\(.net).localtest.me/keycloak/realms/demo")] as $b
   | verdict($a != [] and $b == []; "\($a | n) issuers (\([$a[] | select($sw == null or .ts < $sw)] | n) before switch), \($b | n) not the one of their net") + {bad: $b}'
@@ -196,6 +205,11 @@ rule invalid_grant_phases 'if $cp == null or $sw == null or $rb == null then ski
 rule logout_after_replay 'if $rd == null or $rb == null then skip("needs replay_done + rollback") else
   probes_ig($rd; $rb; "replay_done+\($grace)s and before rollback") end'
 fi
+# DeepSeek review: without this, the lossy rules pass vacuously when no window session is ever refreshed on green.
+rule window_exercised 'ev("promoted") as $pr | if $pr == null or $sw == null then skip("needs promoted + switch") else
+  [$L[] | select(.step == "refresh" and .ts >= $sw + 5 and .ts < ($rb // 1e18) and bornin($pr; $sw))] as $a
+  | [$a[] | select(ig | not)] as $b
+  | verdict(($a | n) > 0 and $b == []; "\($a | map(.login_id) | unique | n) sessions born on blue after the promote, \($a | n) refreshes on green (switch+5s), \($b | n) not invalid_grant") + {bad: $b} end'
 rule relogin_ok '[$L[] | select(.step == "refresh" and ig)] as $a
   | [$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200)] as $ok
   | [$a[] | . as $i | select(any($ok[]; .user == $i.user and .net == $i.net and .ts >= $i.te) | not)] as $b

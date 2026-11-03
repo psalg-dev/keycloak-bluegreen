@@ -7,6 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
 TAG="test"
+export GATE_MAX_GAP_SECONDS=${GATE_MAX_GAP_SECONDS:-60} # fixtures are sparse (gaps up to ~23 s); live k6 is ~60/s
 
 F=load/fixtures
 tmp=$(mktemp) tmpa=$(mktemp); trap 'rm -f "$tmp" "$tmpa"' EXIT
@@ -24,10 +25,11 @@ wrong-iss          |shared|shared-base shared-inflight-ok shared-wrong-iss |shar
 skip-no-switch     |shared|shared-base shared-inflight-ok                  |none  |0|inflight_login=SKIP refresh_across_switch=SKIP
 aborted-at-stop    |shared|shared-base shared-inflight-ok shared-aborted   |shared-stop|0|no_5xx=PASS refresh_across_switch=PASS
 neterr-before-stop |shared|shared-base shared-inflight-ok shared-neterr    |shared-stop|1|no_5xx=FAIL refresh_across_switch=FAIL
-pass-lossy         |lossy |lossy-base                                       |lossy |0|refresh_pre_copy=PASS invalid_grant_in_window=PASS relogin_ok=PASS logout_after_replay=PASS
+pass-lossy         |lossy |lossy-base                                       |lossy |0|refresh_pre_copy=PASS invalid_grant_in_window=PASS relogin_ok=PASS logout_after_replay=PASS window_exercised=PASS load_through_cutover=PASS
 probe-after-replay |lossy |lossy-base lossy-probe-ok                       |lossy |1|logout_after_replay=FAIL
 pre-copy-grant     |lossy |lossy-base lossy-pre-copy-ig                    |lossy |1|refresh_pre_copy=FAIL invalid_grant_in_window=FAIL
 sub-change         |lossy |lossy-base lossy-sub-change                     |lossy |1|sub_stable=FAIL
+window-ok-on-green |lossy |lossy-base lossy-window-ok                      |lossy |1|window_exercised=FAIL
 pass-shared-rb     |shared-rollback|shared-rb-base shared-rb-inflight        |shared-rollback|0|inflight_login=PASS inflight_login_rollback=PASS refresh_blue_after_rollback=PASS refresh_green_after_rollback=PASS
 shared-rb-5xx      |shared-rollback|shared-rb-base shared-rb-inflight shared-rb-5xx|shared-rollback|1|no_5xx=FAIL
 shared-rb-inflight |shared-rollback|shared-rb-base shared-rb-inflight-broken |shared-rollback|1|inflight_login_rollback=FAIL inflight_login=PASS
@@ -86,5 +88,10 @@ while IFS='|' read -r name mode frags events want expect; do
     log "ok   $name (exit $rc${exp:+, FAIL: $exp})"
   fi
 done <<<"$cases"
+# load_through_cutover at the live threshold: the shared fixture's ~10 s silence must FAIL it (build #11: k6 had ended)
+cat "$F/shared-base.k6.jsonl" "$F/shared-inflight-ok.k6.jsonl" > "$tmp"
+out=$(GATE_MAX_GAP_SECONDS=5 scripts/gate.sh shared "$tmp" "$F/shared.events.jsonl" 2>&1) || true
+if grep -Eq '^load_through_cutover +FAIL ' <<<"$out"; then log "ok   load-gap (load_through_cutover FAIL at 5 s)"
+else bad=$((bad + 1)); log "FAIL load-gap: want load_through_cutover FAIL at GATE_MAX_GAP_SECONDS=5"; fi
 ((bad == 0)) || die "$bad gate test(s) failed"
 log "all gate tests passed"
