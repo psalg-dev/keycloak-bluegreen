@@ -31,6 +31,6 @@ RUN apt-get update \
  && /opt/kcwarden/bin/pip install --no-cache-dir "kcwarden==${KCWARDEN_VERSION}" \
  && ln -s /opt/kcwarden/bin/kcwarden /usr/local/bin/kcwarden
 
-RUN jenkins-plugin-cli --plugins configuration-as-code job-dsl workflow-aggregator git timestamper junit
+RUN jenkins-plugin-cli --plugins configuration-as-code job-dsl workflow-aggregator git timestamper junit pipeline-graph-view
 
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false -Dhudson.plugins.git.GitSCM.ALLOW_LOCAL_CHECKOUT=true"
