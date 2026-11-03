@@ -38,7 +38,7 @@ const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU ever
 // rollback rules judge those). With all-long-lived sessions a rollback gate had 0 green-born sessions to look at.
 const ROTATE_SECONDS = Number(__ENV.ROTATE_SECONDS || 60);
 const APP = 'https://app.localtest.me';
-const APP_VUS = Number(__ENV.APP_VUS ?? 6);
+const APP_VUS = Number(__ENV.APP_VUS || 6);
 
 export const options = {
   scenarios: {
