@@ -73,6 +73,17 @@ class AuthCodeFlowTest {
         assertThat(tokens.get("refresh_token")).isNotNull();
     }
 
+    /** Keycloak 25 skips JWKS keys without "use": the key must say sig (and RS256), or no ID token verifies there. */
+    @Test
+    void jwksKeysDeclareSignatureUse() throws Exception {
+        JsonNode keys = JSON.readTree(get(base() + "/oauth2/jwks").body()).get("keys");
+        assertThat(keys).isNotEmpty();
+        keys.forEach(k -> {
+            assertThat(k.get("use").asString()).isEqualTo("sig");
+            assertThat(k.get("alg").asString()).isEqualTo("RS256");
+        });
+    }
+
     @Test
     void issuerFollowsForwardedHostSoOneInstanceServesBothNetworks() throws Exception {
         for (String host : new String[] {"legacy-net1.localtest.me", "legacy-net2.localtest.me"}) {

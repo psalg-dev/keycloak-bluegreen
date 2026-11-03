@@ -497,5 +497,7 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
   Audience mapper works on 25 and silently fails after the upgrade. The demo's test clients carry an Audience mapper
   for `testresource` (config/online/70-test-apps.json); bypass options exist (`allow-token-introspection-without-
   audience-check`, per-client compatibility mode) but the mapper is the correct fix.
+- Upgrade trap the other way (found live, build #16): Keycloak 25 ignores IdP JWKS keys without `use`
+  (26 accepts them), so a 25 broker needs the IdP to publish `use: sig`. The legacy IdP stand-in does so now.
 - In-flight admin/account writes: the freeze waits until the ingress answers 503 on both hosts plus a 2 s settle before
   the copy point, a fixed settle rather than request tracking.
