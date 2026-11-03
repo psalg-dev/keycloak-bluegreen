@@ -29,6 +29,7 @@ import { sleep } from 'k6';
 import exec from 'k6/execution';
 import { parseHTML } from 'k6/html';
 import encoding from 'k6/encoding';
+import crypto from 'k6/crypto';
 // A browser's Accept: text/html first (Spring and the legacy IdP redirect to their login page only for HTML clients),
 // */* last. A bare 'text/html' got 406 from the test client's text/plain pages (/, /frontchannel-logout); browsers don't.
 const HTML = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
@@ -181,11 +182,14 @@ function hops(s, scenario, url, stepFn, done) {
 function doLogin(s, scenario) {
   s.login_id = `${exec.vu.idInTest}-${++seq}`;
   s.rt = null;
+  // PKCE S256, as a real client does (k6-app enforces it: kcwarden ConfidentialClientShouldEnforcePKCE)
+  const verifier = encoding.b64encode(crypto.randomBytes(32), 'rawurl');
   const q = { client_id: 'k6-app', response_type: 'code', scope: 'openid tenant', redirect_uri: REDIRECT,
-    state: `${s.login_id}-${rand(1e9)}`, nonce: String(rand(1e9)), kc_idp_hint: `legacy-${s.net}` };
+    state: `${s.login_id}-${rand(1e9)}`, nonce: String(rand(1e9)), kc_idp_hint: `legacy-${s.net}`,
+    code_challenge: crypto.sha256(verifier, 'base64rawurl'), code_challenge_method: 'S256' };
   const loc = hops(s, scenario, `${kc(s.net)}/protocol/openid-connect/auth?${qs(q)}`, stepOf, (l) => l.startsWith(REDIRECT));
   const code = loc && param(loc, 'code');
-  const t = code ? token(s, scenario, 'login_token', { grant_type: 'authorization_code', code, redirect_uri: REDIRECT }) : null;
+  const t = code ? token(s, scenario, 'login_token', { grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: verifier }) : null;
   if (!t || t.status !== 200) return false;
   s.rt = t.body.refresh_token; s.idt = t.body.id_token;
   return true;

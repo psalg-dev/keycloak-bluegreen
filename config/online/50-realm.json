@@ -1,10 +1,59 @@
 {
   "realm": "demo",
   "loginTheme": "demo",
-  "eventsListeners": ["jboss-logging", "demo-replay"],
+  "eventsListeners": [
+    "jboss-logging",
+    "demo-replay"
+  ],
   "bruteForceProtected": true,
   "permanentLockout": false,
   "failureFactor": 5,
   "waitIncrementSeconds": 60,
-  "maxFailureWaitSeconds": 900
+  "maxFailureWaitSeconds": 900,
+  "clientSessionIdleTimeout": 1800,
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none'; form-action 'self'; base-uri 'self';"
+  },
+  "clients": [
+    {
+      "clientId": "account",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "account-console",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "broker",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "realm-management",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "security-admin-console",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    }
+  ]
 }

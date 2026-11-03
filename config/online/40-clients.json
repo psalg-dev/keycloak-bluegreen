@@ -31,7 +31,8 @@
         "https://app.localtest.me/cb"
       ],
       "attributes": {
-        "post.logout.redirect.uris": "https://app.localtest.me/*"
+        "post.logout.redirect.uris": "https://app.localtest.me/*",
+        "pkce.code.challenge.method": "S256"
       },
       "defaultClientScopes": [
         "profile",

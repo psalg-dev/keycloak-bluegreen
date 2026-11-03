@@ -15,7 +15,39 @@
       "clientId": "account",
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "account-console",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "broker",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
+    },
+    {
+      "clientId": "security-admin-console",
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "microprofile-jwt"
+      ]
     }
-  ]
+  ],
+  "browserSecurityHeaders": {
+    "contentSecurityPolicy": "frame-src 'self'; frame-ancestors 'self'; object-src 'none'; form-action 'self'; base-uri 'self';"
+  }
 }
