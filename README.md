@@ -92,7 +92,8 @@ the production PDB of 2 out of 3. Latency numbers are comparable within a run, n
 
 ## Results
 
-Final run: Jenkins builds #33-#37, default profile, one fresh cluster, commit `f3d94e3`. Load throughout: 5 brokered
+Final run: Jenkins builds #33-#37, default profile, one fresh cluster, commit `f3d94e3` (latency rows re-judged with
+`461bb41`, which unified the gate's and the report's cutover windows; no verdict changed). Load throughout: 5 brokered
 logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 6 app VUs through the two test apps.
 Every gate PASSes.
 
@@ -115,7 +116,7 @@ Every gate PASSes.
 Reading it:
 
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
-  the flip (started on blue, finished on green: 29 / 69 / 42 in-flight logins broken, the user's next attempt goes
+  the flip (started on blue, finished on green: 29 in `minor`, 69 in `minor-rollback`, 42 in `major`; the next attempt goes
   through legacy SSO), refreshes of sessions born in the lossy window (`invalid_grant`, then a silent re-login), and the
   apps' back-/front-channel logouts for those sessions (Keycloak on green never knew them). No session born before the
   copy point was lost, no logged-out session came back after the replay. One user in `minor-rollback` got a second
@@ -126,7 +127,7 @@ Reading it:
   spread of that size.
 - Admin and account console answer 503 from the copy point to the window end: 164-169 s per lossy switch, 112 s for
   the lossy rollback. Login, token, refresh, logout, discovery and JWKS never stop.
-- Memory, default profile (`scripts/mem-sample.sh`, 15 s samples over all five cases): **12.6 GiB** peak for the four
+- Memory, default profile (`scripts/mem-sample.sh`, 262 samples, ~20 s apart, over all five cases): **12.6 GiB** peak for the four
   KinD nodes, **13.6 GiB** with Jenkins, during the `major` switch (both colors, both Postgres clusters, green
   migrating). Keycloak pod max 1.3 GiB, Postgres instance max 352 MiB.
 
