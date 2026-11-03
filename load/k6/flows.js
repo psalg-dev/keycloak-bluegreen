@@ -22,7 +22,7 @@
 //   another app or the account console, so only the back-/front-channel call can end the app session.
 //   app_logout_start = the first logout request (app: POST /logout, kc: GET end_session).
 //   sub, iss, claims on app_me lines come from the /me response.
-// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (5/s), REFRESH_VUS (10), LOGOUT_VUS (4), APP_VUS (6,
+// Env: K6_APP_SECRET, LEGACY_USER_PASSWORD (required); LOGIN_RATE (18/s), REFRESH_VUS (36), LOGOUT_VUS (14), APP_VUS (22,
 // 0 = no app scenario), DURATION (60m, a cap: load.sh stop ends the run).
 import http from 'k6/http';
 import { sleep } from 'k6';
@@ -36,7 +36,7 @@ const HTML = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
 
 const SECRET = __ENV.K6_APP_SECRET;
 const PASSWORD = __ENV.LEGACY_USER_PASSWORD;
-const LOGIN_RATE = Number(__ENV.LOGIN_RATE || 5);
+const LOGIN_RATE = Number(__ENV.LOGIN_RATE || 18);
 const DURATION = __ENV.DURATION || '60m';
 const REDIRECT = 'https://app.localtest.me/cb';
 const PROBE_EVERY = 5; // s, refresh + logout_probe period
@@ -46,15 +46,15 @@ const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU ever
 // rollback rules judge those). With all-long-lived sessions a rollback gate had 0 green-born sessions to look at.
 const ROTATE_SECONDS = Number(__ENV.ROTATE_SECONDS || 60);
 const APP = 'https://app.localtest.me';
-const APP_VUS = Number(__ENV.APP_VUS || 6);
+const APP_VUS = Number(__ENV.APP_VUS || 22);
 
 export const options = {
   scenarios: {
     // up to ~21 s per login (think time), so VUs ~ rate x 25
     login: { executor: 'constant-arrival-rate', exec: 'login', rate: LOGIN_RATE, timeUnit: '1s', duration: DURATION,
       preAllocatedVUs: LOGIN_RATE * 25, maxVUs: LOGIN_RATE * 50 },
-    refresh: { executor: 'constant-vus', exec: 'refresh', vus: Number(__ENV.REFRESH_VUS || 10), duration: DURATION },
-    logout: { executor: 'constant-vus', exec: 'logout', vus: Number(__ENV.LOGOUT_VUS || 4), duration: DURATION },
+    refresh: { executor: 'constant-vus', exec: 'refresh', vus: Number(__ENV.REFRESH_VUS || 36), duration: DURATION },
+    logout: { executor: 'constant-vus', exec: 'logout', vus: Number(__ENV.LOGOUT_VUS || 14), duration: DURATION },
     reads: { executor: 'constant-arrival-rate', exec: 'reads', rate: 1, timeUnit: '1s', duration: DURATION,
       preAllocatedVUs: 2, maxVUs: 5 },
   },

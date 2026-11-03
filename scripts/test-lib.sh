@@ -15,9 +15,9 @@ jq -s -e 'length == 2
 
 [[ $(image_tag 26.8.1) == 26.8.1-p1 && $(image_tag 25.0.6 2) == 25.0.6-p2 ]] || { echo "FAIL image_tag"; exit 1; }
 # profiles: default unchanged, laptop smaller, a typo dies when kc.sh is sourced (subshells: sourcing sets globals)
-[[ $(PROFILE='' bash -c ". '$lib'; echo \$KC_REPLICAS \$PG_INSTANCES \$KIND_CONFIG \$LOGIN_RATE_DEFAULT")  == "3 3 kind/cluster.yaml 5" ]] \
+[[ $(PROFILE='' bash -c ". '$lib'; echo \$KC_REPLICAS \$PG_INSTANCES \$KIND_CONFIG \$LOGIN_RATE_DEFAULT")  == "3 3 kind/cluster.yaml 18" ]] \
   || { echo "FAIL default profile"; exit 1; }
-[[ $(PROFILE=laptop bash -c ". '$lib'; echo \$KC_REPLICAS \$PG_INSTANCES \$KIND_CONFIG \$LOGIN_RATE_DEFAULT") == "2 2 kind/cluster-laptop.yaml 2" ]] \
+[[ $(PROFILE=laptop bash -c ". '$lib'; echo \$KC_REPLICAS \$PG_INSTANCES \$KIND_CONFIG \$LOGIN_RATE_DEFAULT") == "2 2 kind/cluster-laptop.yaml 6" ]] \
   || { echo "FAIL laptop profile"; exit 1; }
 if PROFILE=bogus bash -c ". '$lib'" 2>/dev/null; then echo "FAIL unknown PROFILE accepted"; exit 1; fi
 # every script outside lib/ runs as a command (Jenkins, other scripts): committed 100755. Windows checkouts don't record
