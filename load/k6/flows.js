@@ -26,6 +26,10 @@ const DURATION = __ENV.DURATION || '10m';
 const REDIRECT = 'https://app.localtest.me/cb';
 const PROBE_EVERY = 5; // s, refresh + logout_probe period
 const LOGOUT_EVERY = 30; // s of probing between logouts: one logout per VU every ~45 s (login + think + 30 s)
+// Refresh VUs: odd ones keep ONE session for the whole run (the "born before switch / copy point" rules need long-lived
+// sessions); even ones start a fresh session every ROTATE_SECONDS, so sessions are also born on the new color (the
+// rollback rules judge those). With all-long-lived sessions a rollback gate had 0 green-born sessions to look at.
+const ROTATE_SECONDS = Number(__ENV.ROTATE_SECONDS || 60);
 
 export const options = {
   scenarios: {
@@ -166,9 +170,11 @@ export function login() {
   doLogin(newSession(), 'login');
 }
 
-// Hold one session for the run, refresh every 5 s; invalid_grant -> silent re-login (same jar = legacy SSO).
+// Hold a session, refresh every 5 s; invalid_grant -> silent re-login (same jar = legacy SSO).
+// Even VUs rotate to a brand-new session every ROTATE_SECONDS (see above).
 export function refresh() {
-  if (!held) held = newSession();
+  if (held && exec.vu.idInTest % 2 === 0 && Date.now() - held.since > ROTATE_SECONDS * 1000) held = null;
+  if (!held) { held = newSession(); held.since = Date.now(); }
   if (!held.rt && !doLogin(held, held.lost ? 'relogin' : 'refresh')) { sleep(PROBE_EVERY); return; }
   sleep(PROBE_EVERY);
   const t = token(held, 'refresh', 'refresh', { grant_type: 'refresh_token', refresh_token: held.rt });
