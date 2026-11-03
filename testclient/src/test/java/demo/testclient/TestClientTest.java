@@ -107,6 +107,22 @@ class TestClientTest {
     }
 
     @Test
+    void csrfTokenFromMeAllowsRpInitiatedLogout(CapturedOutput out) throws Exception {
+        OAuth2AuthenticationToken auth = oidc("bc-net1", "sid-rp-1");
+        MockHttpSession session = new MockHttpSession();
+        String csrf = mvc.perform(get("/me").session(session).with(authentication(auth))).andExpect(status().isOk())
+                .andReturn().getResponse().getHeader("X-CSRF-TOKEN");
+        assertThat(csrf).isNotBlank();
+
+        mvc.perform(post("/logout").session(session).with(authentication(auth))).andExpect(status().isForbidden());
+        String endSession = mvc.perform(post("/logout").session(session).with(authentication(auth)).header("X-CSRF-TOKEN", csrf))
+                .andExpect(status().isFound()).andReturn().getResponse().getHeader("Location");
+        assertThat(endSession).startsWith(issuer("net1") + "/protocol/openid-connect/logout?")
+                .contains("id_token_hint=id-token", "post_logout_redirect_uri=https://app.localtest.me/");
+        assertThat(out).contains("\"event\":\"logout_initiated\",\"registration\":\"bc-net1\",\"sid\":\"sid-rp-1\"}");
+    }
+
+    @Test
     void frontChannelLogoutEndsTheSessionWithThatSid(CapturedOutput out) throws Exception {
         MockHttpSession session = new MockHttpSession();
         MockHttpServletRequest login = new MockHttpServletRequest();
