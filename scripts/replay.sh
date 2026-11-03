@@ -14,10 +14,21 @@ from=${1:?from} to=${2:?to} since=${3:?since}
 
 lines=$(mktemp)
 for p in $(kubectl -n "$NS" get pods -l "app.kubernetes.io/instance=kc-$from" -o name); do
+  # Lines are lost if the container restarted in the window (logs of the old container) OR the pod itself was
+  # deleted and recreated in the window (a fresh pod has an empty lastState, so the restart check can't see it).
   restarted=$(kubectl -n "$NS" get "$p" -o jsonpath='{.status.containerStatuses[0].lastState.terminated.finishedAt}')
+  created=$(kubectl -n "$NS" get "$p" -o jsonpath='{.metadata.creationTimestamp}')
   [[ -z $restarted || $restarted < "$since" ]] || die "$p restarted at $restarted, inside the window: its replay lines are gone"
+  [[ $created < "$since" ]] || die "$p was (re)created at $created, inside the window: a predecessor's replay lines may be gone"
   kubectl -n "$NS" logs "$p" -c keycloak --since-time="$since" | grep '^{"replay":true' >> "$lines" || true
 done
+
+# apply <what> <METHOD> <path>: 2xx = done, 404 = it never reached <to>'s DB (fine); anything else fails the replay
+# (it used to be `|| true`, which counted a 401/5xx as replayed)
+apply() {
+  local code; code=$(admin_api "$2" "$3" -o /dev/null -w '%{http_code}' || true)
+  [[ $code == 2?? || $code == 404 ]] || die "replay $1: $2 $3 -> HTTP ${code:-none}"
+}
 
 admin_direct_start "$to"
 trap admin_direct_stop EXIT
@@ -27,7 +38,7 @@ while read -r l; do
   [[ $(jq -r .realmId <<<"$l") == "$realm_id" ]] || continue
   case $(jq -r .type <<<"$l") in
     LOGOUT)
-      admin_api DELETE "/realms/demo/sessions/$(jq -r .sessionId <<<"$l")" >/dev/null || true
+      apply logout DELETE "/realms/demo/sessions/$(jq -r .sessionId <<<"$l")"
       logouts=$((logouts + 1)) ;;
     REGISTER)
       jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, enabled: true, emailVerified: true,
@@ -36,8 +47,8 @@ while read -r l; do
       users=$((users + 1)) ;;
     REVOKE_GRANT)
       sid=$(jq -r '.sessionId // empty' <<<"$l")
-      if [[ -n $sid ]]; then admin_api DELETE "/realms/demo/sessions/$sid" >/dev/null || true
-      else admin_api POST "/realms/demo/users/$(jq -r .userId <<<"$l")/logout" >/dev/null || true; fi
+      if [[ -n $sid ]]; then apply revoke DELETE "/realms/demo/sessions/$sid"
+      else apply revoke POST "/realms/demo/users/$(jq -r .userId <<<"$l")/logout"; fi
       revokes=$((revokes + 1)) ;;
   esac
 done < "$lines"
