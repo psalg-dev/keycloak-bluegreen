@@ -132,7 +132,7 @@ def cls:
 
 # --- error/request rate series, 2 s buckets: k6 line classes + app failures
 | 2 as $B
-| ([$L[] | {ts, c: cls}]
+| ([$L[] | {ts, c: cls, u: .user}]
    + [$intro[] | select(.error != null or .http_status != 200) | {ts, c: "introspection_error"}]
    + [$A[] | select(.app == "testclient" and .event == "refresh" and .ok != true)
       | {ts, c: (if .error == "invalid_grant" then "refresh_lost_session" else "refresh_other_error" end)}]
@@ -146,6 +146,13 @@ def cls:
     | [range($bs | min; ($bs | max) + 1)] as $r
     | {B: $B, x0: (($bs | min) * $B), req: [$r[] | ($N[tostring] // 0) / $B | r(100)],
        err: ([$pts[].c // empty] | unique | map(. as $c | {key: $c, value: [$r[] | ($G[tostring].c[$c] // 0) / $B | r(100)]}) | from_entries)} end) as $series
+
+# --- user impact: distinct k6 users, of which how many hit an error and how many only had a request slower than 1 s
+# (a user counts once; "slow" users are those with no error at all, so errors + slow = affected)
+| ([$L[] | select(.user != null) | .user] | unique) as $all_users
+| ([$pts[] | select(.c != null and .u != null) | .u] | unique) as $err_users
+| ([$L[] | select(.user != null and ((.te - .ts) > 1)) | .user] | unique) as $slow_users
+| (($err_users + $slow_users) | unique) as $hit_users
 
 | def ph($p): [$L[] | select(phase(.ts) == $p)];
   def errs: [.[] | select(cls != null)] | length;
@@ -166,6 +173,8 @@ def cls:
   gate: {verdict: ([$gl[] | capture("^GATE (?<v>PASS|FAIL) \\((?<mode>[^)]*)\\)")] | .[0]),
          rules: [$gl[] | capture("^(?<rule>[a-z0-9_]+) +(?<state>PASS|FAIL|SKIP|INFO) +(?<detail>.*)$")]},
   series: $series, latency: $latseries, dist: $dist,
+  users: {total: ($all_users | length), errors: ($err_users | length),
+          slow: (($slow_users - $err_users) | unique | length), affected: ($hit_users | length), slow_ms: 1000},
   headline: {requests: ($L | length), errors: ($L | errs), error_rate: (if $L == [] then null else ($L | errs) / ($L | length) | r(100000) end),
              cut_requests: (ph("cut") | length), cut_errors: (ph("cut") | errs),
              cut_error_rate: (ph("cut") as $c | if $c == [] then null else ($c | errs) / ($c | length) | r(100000) end),

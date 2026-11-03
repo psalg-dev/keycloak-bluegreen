@@ -193,7 +193,10 @@ function xrange(c) {
 
 function renderCase(c, root) {
   const xr = xrange(c), charts = [];
-  const meta = c.meta || {};
+  const meta = c.meta || {}, u = c.users || {};
+  const userLine = u.total ? [
+    num(u.total) + ' users seen under load: ', num(u.errors) + ' hit an error, ', num(u.slow) + ' only had a request over ' + (u.slow_ms / 1000) + ' s - ',
+    h('strong', {}, num(u.affected) + ' potentially impacted (' + pct(u.affected / u.total) + ')')] : 'n/a';
   root.append(h('h2', {}, c.case + ': ' + c.from + ' → ' + c.to));
   if (c.synthetic) root.append(h('div', { class: 'synthetic', role: 'note' }, h('strong', {}, '⚠ SYNTHETIC DATA. '), c.synthetic));
   const head = h('dl', { class: 'kv' },
@@ -204,6 +207,7 @@ function renderCase(c, root) {
     h('dt', {}, 'build / commit'), h('dd', {}, meta.build ? h('span', {}, '#' + meta.build + ' ', meta.commit ? h('code', {}, String(meta.commit).slice(0, 10)) : '',
       meta.url ? ' (' + meta.url + ')' : '') : 'n/a'),
     h('dt', {}, 'k6 lines'), h('dd', {}, num(c.run.lines) + ' judged, ' + num(c.run.aborted) + ' aborted by the k6 stop (excluded, like the gate)'),
+    h('dt', {}, 'users potentially impacted'), h('dd', {}, userLine),
     h('dt', {}, 'gate'), h('dd', {}, gateBadge(c)));
   const rules = c.gate.rules.length ? h('details', {}, h('summary', {}, 'gate rules (' + c.gate.rules.length + ')'),
     h('div', { class: 'scroll' }, h('table', {}, h('tr', {}, h('th', {}, 'rule'), h('th', {}, 'state'), h('th', {}, 'detail')),
@@ -356,13 +360,14 @@ function renderOverview(root) {
       'Tabs marked SYNTHETIC hold generated data, not measurements.'));
   const cs = D.cases;
   root.append(h('h3', {}, 'Headline numbers'), h('div', { class: 'card scroll' }, h('table', {},
-    h('tr', {}, ['case', 'mechanism', 'gate', 'requests', 'error rate', 'cutover error rate', 'p95 pre-switch', 'p95 cutover', 'p95 post'].map((t, i) => h('th', { class: i > 2 ? 'num' : null }, t))),
+    h('tr', {}, ['case', 'mechanism', 'gate', 'requests', 'users impacted', 'error rate', 'cutover error rate', 'p95 pre-switch', 'p95 cutover', 'p95 post'].map((t, i) => h('th', { class: i > 2 ? 'num' : null }, t))),
     cs.map((c) => h('tr', {}, h('td', {}, h('a', { href: '#' + c.case }, c.case), c.synthetic ? h('div', {}, h('span', { class: 'badge v-warn' }, 'SYNTHETIC')) : null),
       h('td', {}, c.mechanism), h('td', {}, gateBadge(c)), h('td', { class: 'num' }, num(c.headline.requests)),
+      h('td', { class: 'num' }, c.users ? (num(c.users.affected) + ' (' + pct(c.users.affected / c.users.total) + ')') : 'n/a'),
       h('td', { class: 'num' }, pct(c.headline.error_rate) + ' (' + num(c.headline.errors) + ')'),
       h('td', { class: 'num' }, pct(c.headline.cut_error_rate) + ' (' + num(c.headline.cut_errors) + ' / ' + num(c.headline.cut_requests) + ')'),
       h('td', { class: 'num' }, num(c.headline.p95_pre, 1) + ' ms'), h('td', { class: 'num' }, num(c.headline.p95_cut, 1) + ' ms'), h('td', { class: 'num' }, num(c.headline.p95_post, 1) + ' ms')))),
-    h('p', { class: 'note' }, 'Error = any k6 line in a failure class (5xx, status 0, failed login hop, refresh failure, logged-out session refreshed, other 4xx). p95 over all k6 requests of the window.')));
+    h('p', { class: 'note' }, 'Error = any k6 line in a failure class (5xx, status 0, failed login hop, refresh failure, logged-out session refreshed, other 4xx). p95 over all k6 requests of the window. Users impacted = distinct k6 users with at least one error line or at least one request slower than 1 s (a user counts once; the case tab splits errors from slow-only).')));
   root.append(h('h3', {}, 'Failure modes × scenarios'), h('div', { class: 'card scroll' }, h('table', {},
     h('tr', {}, h('th', {}, 'failure mode'), cs.map((c) => h('th', { class: 'num' }, c.case + (c.synthetic ? ' *' : '')))),
     MODES.map((id) => h('tr', {}, h('td', {}, h('code', {}, id)), cs.map((c) => {

@@ -122,6 +122,7 @@ two test apps - about 12 000-31 000 k6 requests per case. Every gate PASSes.
 | k6 requests | 12,639 | 15,012 | 23,451 | 30,730 | 21,231 |
 | 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
 | error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.23 % (0.66 %) | 0.24 % (0.78 %) | 0.19 % (0.72 %) |
+| users potentially impacted (of users seen) | 0 of 754 | 2 of 877 (0.2 %) | 26 of 1,252 (2.1 %) | 62 of 1,556 (4.0 %) | 31 of 1,155 (2.7 %) |
 | lossy window (copy point -> switch) | - | - | 106.2 s | 105.3 s | 107.7 s |
 | sessions lost = silent re-logins | 0 | 0 | 3 | 14 (+7 green-born, at the rollback) | 9 |
 | logouts / new users replayed | - | - | 15 / 47 | 16 / 38 forward, 19 / 66 back | 15 / 47 |
@@ -135,6 +136,11 @@ two test apps - about 12 000-31 000 k6 requests per case. Every gate PASSes.
 
 Reading it:
 
+- **Users first**: 26 of 1,252 people in `minor`, 62 of 1,556 in `minor-rollback` and 31 of 1,155 in `major` were
+  potentially impacted - they hit at least one error line (a lost session's `invalid_grant`, a straddling login, a
+  channel logout for a session Keycloak no longer had) or a request over 1 s. The shared cases: nobody in `patch`,
+  two in `patch-rollback` (slow only). The report counts each user once; the definition is in
+  [docs/failure-modes.md](docs/failure-modes.md).
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
   the flip (started on blue, finished on green; the next attempt goes through legacy SSO), refreshes of sessions born
   in the lossy window (`invalid_grant`, then a silent re-login), and the apps' back-/front-channel logouts for those

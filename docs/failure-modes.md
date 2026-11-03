@@ -27,6 +27,12 @@ Roughly 25-30 k6 requests/s, 12 000-31 000 lines per case. Every request is one 
 test apps (once built) log one JSON line per login/call/refresh/logout/introspection to `apps.jsonl`
 (`docs/test-apps-contract.md`). Nothing else is measured: no server-side metrics, no edge logs.
 
+**Impact per user.** The report counts each `user` (present on every k6 line) once and marks it *potentially impacted*
+when it had at least one error line (any failure class above) or at least one request slower than 1 s. The case tab
+splits "hit an error" from "slow only"; the Overview column is the union over the users seen in that run. This is the
+number to quote for user experience: an error rate of 0.23 % of 23 451 requests reads differently as "26 of 1 252
+users", because a lost session costs one person a re-login, not one request.
+
 **Time.** All times are seconds relative to the first `switch` event (t = 0). k6 and the scripts share the host
 clock (KinD containers on one machine). A request belongs to the moment it started (`t_start`).
 
