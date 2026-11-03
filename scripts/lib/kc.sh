@@ -192,7 +192,7 @@ delete_dbs() {
 }
 
 # wait_progress <seconds> <label>: sleep, but log every 30 s what the load generator sees so far
-# (requests, 5xx/status 0, invalid_grant, logins completed). Silent sleeps make a live run look dead.
+# (requests, 5xx/status 0, refresh invalid_grant, logins, logged-out sessions that still refresh). Silent sleeps make a live run look dead.
 wait_progress() {
   local total=$1 label=$2 waited=0 step p
   while ((waited < total)); do
@@ -201,7 +201,7 @@ wait_progress() {
     if [[ -n $p ]]; then
       log "$label ${waited}/${total}s | k6: $(kubectl -n load exec "$p" -- cat /out/k6.log 2>/dev/null \
         | jq -rRs '[split("\n")[] | fromjson? | select(type == "object" and has("t_start"))]
-          | "\(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant")) | length) invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins"')"
+          | "\(length) requests, \(map(select(.status >= 500 or .status == 0)) | length) 5xx/neterr, \(map(select(.error == "invalid_grant" and .step == "refresh")) | length) refresh invalid_grant, \(map(select(.step == "login_token" and .status == 200)) | length) logins, \(map(select(.step == "logout_probe" and .status == 200)) | length) logged-out refreshes"')"
     else
       log "$label ${waited}/${total}s"
     fi
