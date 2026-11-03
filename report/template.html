@@ -350,15 +350,21 @@ function renderCase(c, root) {
 }
 
 function renderOverview(root) {
-  root.append(h('h2', {}, 'Overview'),
-    h('div', { class: 'card note' }, h('strong', {}, 'How to read this. '),
-      'Each tab is one demo case run under load (k6: brokered logins, refreshes every 5 s, logouts with probes, discovery/JWKS reads). ',
-      'Time is in seconds relative to the switch; the shaded band is the cutover window (shared: switch .. pod recovered; lossy: copy_point .. window_end; rollback: rollback_start .. rollback end). ',
-      'Each failure mode (ids from docs/test-apps-contract.md, specified in docs/failure-modes.md) is counted against its attempts and judged against what the case\'s mechanism is ',
-      h('em', {}, 'expected'), ' to lose: "expected" = losses inside the bound (e.g. lossy sessions born in [copy_point, switch]), "over bound" = occurrences outside it. ',
-      '"not measured (no data)" means the source lines are missing (e.g. the test apps), never zero. The gate verdict comes from gate.txt; some modes are only reported, not gated. ',
-      'Tabs marked SYNTHETIC hold generated data, not measurements.'));
   const cs = D.cases;
+  const sum = (f) => cs.reduce((a, c) => a + (f(c) || 0), 0);
+  const span = (f, d) => { const v = cs.map(f).filter((x) => x != null); return v.length ? num(Math.min(...v), d) + '-' + num(Math.max(...v), d) : 'n/a'; };
+  const totReq = sum((c) => c.run.lines), totUsers = sum((c) => c.users && c.users.total), totSecs = sum((c) => c.run.seconds);
+  root.append(h('h2', {}, 'Overview'),
+    h('div', { class: 'card' }, h('div', { class: 'kv' },
+      h('dt', {}, 'cases'), h('dd', {}, cs.length + ' run back to back on the default profile: ' + cs.map((c) => c.case).join(', ')),
+      h('dt', {}, 'k6 requests'), h('dd', {}, h('strong', {}, num(totReq)), ' measured (' + span((c) => c.run.lines) + ' per case)'),
+      h('dt', {}, 'users seen'), h('dd', {}, h('strong', {}, num(totUsers)), ' distinct usernames under load (' + span((c) => c.users && c.users.total) + ' per case; a user in two cases counts once in each)'),
+      h('dt', {}, 'users impacted'), h('dd', {}, h('strong', {}, num(sum((c) => c.users && c.users.affected))), ' had an error or a request over 1 s (' + span((c) => c.users && c.users.affected) + ' per case, ' +
+        pct(sum((c) => c.users && c.users.affected) / totUsers) + ' of all users)'),
+      h('dt', {}, 'run time'), h('dd', {}, Math.round(totSecs / 60) + ' min measured (' + span((c) => c.run.seconds / 60) + ' min per case)'),
+      h('dt', {}, 'load'), h('dd', {}, '2 brokered logins/s, 3 app VUs, 10 refresh VUs (every 5 s), 4 logout VUs with probes, discovery/JWKS reads 1/s'),
+      h('dt', {}, 'sources'), h('dd', {}, 'k6 request lines, the two test apps\' lines, the switch scripts\' events; no server-side or edge metrics'),
+      h('dt', {}, 'generated'), h('dd', {}, D.generated))));
   root.append(h('h3', {}, 'Headline numbers'), h('div', { class: 'card scroll' }, h('table', {},
     h('tr', {}, ['case', 'mechanism', 'gate', 'requests', 'users impacted', 'error rate', 'cutover error rate', 'p95 pre-switch', 'p95 cutover', 'p95 post'].map((t, i) => h('th', { class: i > 2 ? 'num' : null }, t))),
     cs.map((c) => h('tr', {}, h('td', {}, h('a', { href: '#' + c.case }, c.case), c.synthetic ? h('div', {}, h('span', { class: 'badge v-warn' }, 'SYNTHETIC')) : null),
@@ -375,7 +381,10 @@ function renderOverview(root) {
       return h('td', {}, h('span', { class: 'cell v-' + m.verdict, title: VERDICT[m.verdict] + ': ' + m.count + ' of ' + m.attempts + '; expected ' + m.expected + '; ' + m.gate },
         m.verdict === 'nodata' ? 'no data' : pct(m.rate) + (m.count ? ' (' + num(m.count) + ')' : '')));
     })))),
-    h('p', { class: 'note' }, 'Cell = rate (count). Left bar: ', badge('ok'), ' ', badge('expected'), ' ', badge('warn'), ' ', badge('fail'), ' ', badge('nodata'),
+    h('p', { class: 'note' }, 'Cell = rate (count). Each mode is counted against its attempts and judged against what the case\'s mechanism is ',
+      h('em', {}, 'expected'), ' to lose: ', badge('expected'), ' = losses inside the bound (e.g. lossy sessions born in [copy_point, switch]), ', badge('fail'),
+      ' = occurrences outside it; ', badge('nodata'), ' = the source lines are missing, never zero. Time in every tab is seconds relative to the switch; the shaded band is the cutover window (shared: switch .. pod recovered; lossy: copy_point .. window_end; rollback: rollback_start .. rollback end). ',
+      'Some modes are reported, not gated; the gate verdict comes from gate.txt.',
       cs.some((c) => c.synthetic) ? ' * = SYNTHETIC data.' : '')));
 }
 
