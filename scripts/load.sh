@@ -65,6 +65,8 @@ start)
   : "${LOGIN_RATE:=$LOGIN_RATE_DEFAULT}" "${APP_VUS:=$APP_VUS_DEFAULT}" # per PROFILE (lib/kc.sh)
   LOGIN_RATE=$LOGIN_RATE REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} APP_VUS=$APP_VUS DURATION=${DURATION:-60m} \
     envsubst < k8s/k6-job.yaml.tpl | kubectl apply -f - >/dev/null
+  # `wait -l` fails at once ("no matching resources") while the Job has no pod yet (laptop build #21): wait for one first
+  for _ in $(seq 60); do [[ -n $(kubectl -n "$LNS" get pod -l job-name=k6 -o name 2>/dev/null) ]] && break; sleep 1; done
   kubectl -n "$LNS" wait pod -l job-name=k6 --for=condition=Ready --timeout=120s >/dev/null || die "k6 pod not Ready"
   log "k6 started (rate $LOGIN_RATE/s, app VUs $APP_VUS, ${DURATION:-60m})"
   ;;
