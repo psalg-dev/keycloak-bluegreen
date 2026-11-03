@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# check-cluster.sh <color>: 3 Ready pods on 3 distinct zones, one JGroups view of size 3 with only this color's pods.
+# check-cluster.sh <color>: KC_REPLICAS (3; PROFILE=laptop 2) Ready pods on as many distinct zones, one JGroups view
+# of that size with only this color's pods.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -9,11 +10,12 @@ sel="app.kubernetes.io/name=keycloak,app.kubernetes.io/instance=kc-$color"
 
 pods=$(kubectl -n "$NS" get pods -l "$sel" -o json)
 ready=$(jq '[.items[] | select(any(.status.conditions[]?; .type=="Ready" and .status=="True"))] | length' <<<"$pods")
-[[ $ready == 3 ]] || die "kc-$color: $ready/3 pods Ready"
+want=$KC_REPLICAS
+[[ $ready == "$want" ]] || die "kc-$color: $ready/$want pods Ready"
 
 zones=$(jq -r '.items[].spec.nodeName' <<<"$pods" | while read -r n; do
   kubectl get node "$n" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}{"\n"}'; done | sort -u | wc -l)
-[[ $zones == 3 ]] || die "kc-$color: pods span $zones zones, want 3"
+[[ $zones == "$want" ]] || die "kc-$color: pods span $zones zones, want $want"
 
 # ISPN000094: "Received new cluster view for channel <name>: [<coord>|<n>] (<size>) [<members>]"
 # 25 has no cluster-name option (channel stays ISPN); its colors are kept apart by DNS_PING on the release's headless
@@ -23,8 +25,8 @@ for p in $(jq -r '.items[].metadata.name' <<<"$pods"); do
   view=$(kubectl -n "$NS" logs "$p" | grep -o 'ISPN000094[^"]*' | tail -1)
   [[ -n $view ]] || die "$p: no cluster view logged"
   grep -q "channel $chan:" <<<"$view" || die "$p: wrong channel: $view"
-  grep -q ') (3) \[\|] (3) \[' <<<"$view" || die "$p: view size != 3: $view"
-  members=${view##*(3) [}; members=${members%%]*}; members=$(tr ',' '\n' <<<"$members")
+  grep -q ") ($want) \[\|] ($want) \[" <<<"$view" || die "$p: view size != $want: $view"
+  members=${view##*("$want") [}; members=${members%%]*}; members=$(tr ',' '\n' <<<"$members")
   if grep -v "kc-$color-" <<<"$members" | grep -q .; then die "$p: foreign member in view: $view"; fi
 done
 
@@ -34,4 +36,4 @@ direct=$(kubectl -n "$NS" run "np-$RANDOM" --rm -i --restart=Never --quiet --ima
 [[ $direct == 000 ]] || die "kc-$color: unlabelled pod reached Keycloak directly (HTTP $direct); NetworkPolicy not enforced"
 
 [[ $(state activeColor) == "$color" ]] || log "note: kc-state.activeColor=$(state activeColor)"
-log "OK kc-$color: 3/3 Ready, 3 zones, one view of 3, direct access blocked"
+log "OK kc-$color: $want/$want Ready, $want zones, one view of $want, direct access blocked"

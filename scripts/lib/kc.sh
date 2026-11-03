@@ -12,6 +12,32 @@ KC_IMAGE=kc-bluegreen/keycloak
 log() { printf '%s %s%s\n' "$(date -u +%FT%TZ)" "${TAG:+[$TAG] }" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
 
+# PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color, 3 Postgres instances).
+# laptop = fits a 16 GB laptop (Docker VM 8-10 GB): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
+# (2 pods/color, PDB 1, smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount
+# (check-cluster.sh compares them). PG_INSTANCES 2, not 1: same pg templates and the same promote/restart path as
+# default (only the count differs), sync replication (ANY 1) kept; 1 instance needs the synchronous block removed
+# (no standby to ack) for ~340 MiB less per cluster. Cost of 2: a standby restart stalls commits (dataDurability).
+# laptop k6: fewer logins/s (login VUs = rate x 25) and app VUs; refresh/logout VUs stay (cheap, the gate needs them).
+# NGINX_WORKERS: ingress-nginx defaults to one worker per CPU the node sees (= every host CPU); 2 carry this load.
+PROFILE=${PROFILE:-default}
+# shellcheck disable=SC2034 # read by the scripts that source this file
+case $PROFILE in
+  default) KC_REPLICAS=3 PG_INSTANCES=3 LOGIN_RATE_DEFAULT=5 APP_VUS_DEFAULT=6 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
+  laptop) KC_REPLICAS=2 PG_INSTANCES=2 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
+  *) die "unknown PROFILE '$PROFILE' (default|laptop)" ;;
+esac
+
+# check_profile: a cluster records its profile as node label kc-bluegreen/profile (kind/cluster-<profile>.yaml; no label
+# = default). Running one profile against a cluster made with another fails here, not deep inside a switch. Called where
+# the profile shapes cluster objects (up.sh, create_db, deploy_color, switch-lossy, rollback), not in kube_connect: the
+# security jobs are profile-agnostic.
+check_profile() {
+  local p; p=$(kubectl get node "$CLUSTER-control-plane" -o json | jq -r '.metadata.labels["kc-bluegreen/profile"] // "default"') \
+    || die "cannot read node $CLUSTER-control-plane"
+  [[ $p == "$PROFILE" ]] || die "cluster $CLUSTER was created with PROFILE=$p, this run has PROFILE=$PROFILE (use PROFILE=$p or recreate the cluster)"
+}
+
 # Any command that fails (and isn't handled with if/||) logs its exit code, script:line and the command itself, so a
 # red Jenkins stage says WHAT failed. errtrace: also inside functions. (Same rules as set -e: conditions don't trigger.)
 set -o errtrace
@@ -86,8 +112,9 @@ ensure_secret() {
 # create_db <name>: CNPG cluster, waits until Ready
 create_db() {
   local TAG=database
-  log "creating db $1 (3 instances, sync replication) and waiting for Ready"
-  DB=$1 NS=$NS envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
+  check_profile
+  log "creating db $1 ($PG_INSTANCES instances, sync replication) and waiting for Ready"
+  DB=$1 NS=$NS PG_INSTANCES=$PG_INSTANCES envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$1" --for=condition=Ready --timeout=600s >/dev/null
   log "db $1 ready"
 }
@@ -96,7 +123,9 @@ create_db() {
 deploy_color() {
   local color=$1 version=$2 db=$3 tag; tag=$(image_tag "$2" "${4:-1}")
   local overlay=(); [[ $version == 25.* ]] && overlay=(-f helm/values-kc25.yaml)
-  log "deploying kc-$color @ $version ($tag) on $db, waiting for 3 Ready pods (helm --wait)"
+  [[ $PROFILE == default ]] || overlay+=(-f "helm/values-$PROFILE.yaml") # last: wins over common + kc25
+  check_profile
+  log "deploying kc-$color @ $version ($tag) on $db, waiting for $KC_REPLICAS Ready pods (helm --wait)"
   helm upgrade --install "kc-$color" "$CHART" --version "$CHART_VERSION" -n "$NS" \
     -f helm/values-common.yaml "${overlay[@]}" \
     --set "image.tag=$tag" \

@@ -12,9 +12,10 @@ target=${1:?target_version}
 active=$(state activeColor) src=$(state activeDb) from=$(state version)
 idle=$([[ $active == blue ]] && echo green || echo blue)
 new=pg-$(( ${src#pg-} + 1 ))
+check_profile # before the replica DB below takes PG_INSTANCES
 
 # 1. Green's DB: a streaming replica of the active one. 2. Target image ready (keeps the window short).
-DB=$new SRC=$src NS=$NS envsubst < k8s/postgres/pg-replica.yaml.tpl | kubectl apply -f - >/dev/null
+DB=$new SRC=$src NS=$NS PG_INSTANCES=$PG_INSTANCES envsubst < k8s/postgres/pg-replica.yaml.tpl | kubectl apply -f - >/dev/null
 kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$new" --for=condition=Ready --timeout=900s >/dev/null
 event replica_ready db="$new" source="$src"
 build_image "$target" 1

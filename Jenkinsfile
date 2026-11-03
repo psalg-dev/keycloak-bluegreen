@@ -4,7 +4,7 @@
 def phase(String p) {
   sh """#!/usr/bin/env bash
 set -euo pipefail
-export RUN_MAINTENANCE
+export RUN_MAINTENANCE PROFILE
 scripts/demo.sh "\$CASE" ${p}
 """
 }

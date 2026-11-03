@@ -1,0 +1,23 @@
+# PROFILE=laptop overlay, applied last by deploy_color (after values-common.yaml and, for 25.x, values-kc25.yaml).
+# Goal: the whole demo on a 16 GB laptop (Docker VM 8-10 GB). Never set extraEnvVars here: helm replaces lists, so it
+# would drop values-kc25.yaml's list on the major case.
+
+# 2 pods per color on 2 KinD workers (zones a, b): a switch still runs 2 colors side by side, and switch-shared.sh's
+# graceful kill of one pod per color still leaves one serving pod each. Must equal KC_REPLICAS (scripts/lib/kc.sh).
+replicaCount: 2
+
+# 1 of 2 guaranteed (default: 2 of 3, prod's 3 AZs). Still allows exactly one voluntary disruption at a time.
+pdb:
+  create: true
+  minAvailable: 1
+
+# Keycloak sizes its heap from the container limit (official image: MaxRAMPercentage=70, InitialRAMPercentage=50,
+# keycloak.org/server/containers, which also names 750 MB as the minimum limit). 1Gi -> ~717 MiB max heap, ~300 MiB
+# off-heap headroom (the documented 750 MB minimum leaves ~240). Default 2Gi: 1 GiB initial heap alone, which is most
+# of the measured 1189 MiB. ponytail: 1Gi is not measured under load; an OOMKilled pod or a restart (replay.sh fails
+# on blue restarts) -> raise to 1280Mi.
+# CPU request 500m, not 1: every KinD node reports all the VM's CPUs, but 4 Keycloak pods x 1 CPU on 2 workers
+# (+ Postgres, k6, legacy IdP) would not schedule on a 4-vCPU Docker VM. No CPU limit, as in default.
+resources:
+  requests: { cpu: 500m, memory: 1Gi }
+  limits: { memory: 1Gi }

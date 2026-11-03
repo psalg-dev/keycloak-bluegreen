@@ -12,8 +12,10 @@ TAG="deployment"
 cur=$(state activeColor) curdb=$(state activeDb) curv=$(state version)
 old=$(state previousColor) olddb=$(state previousDb) oldv=$(state previousVersion)
 [[ -n $old ]] || die "no previous state in kc-state: nothing to roll back to"
+check_profile # the readiness bar below depends on it
 ready=$(kubectl -n "$NS" get sts "kc-$old-keycloak" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
-[[ ${ready:-0} -ge 2 ]] || die "kc-$old is not running (hold expired?): roll back = fix forward with a new switch"
+# running = all pods but one ready, i.e. the PDB's guaranteed count (2 of 3; PROFILE=laptop 1 of 2)
+[[ ${ready:-0} -ge $((KC_REPLICAS - 1)) ]] || die "kc-$old is not running (hold expired?): roll back = fix forward with a new switch"
 event rollback_start reason="${REASON:-drill}" from="$cur" to="$old"
 
 if [[ $curdb == "$olddb" ]]; then

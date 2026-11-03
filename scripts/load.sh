@@ -4,7 +4,7 @@
 #   collect  writes k6's JSON lines (schema: top of flows.js) to out/k6.jsonl and the test apps' JSON lines
 #            (docs/test-apps-contract.md) since the load started to out/apps.jsonl; works while k6 runs
 #   stop     stops k6 gracefully (SIGINT), collects, deletes the Job
-# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) APP_VUS (6; 0 when ns apps does not exist) DURATION (60m: a cap only, cool-down stops k6; 10m ran out mid-switch in build #11)
+# Env: LOGIN_RATE (5; PROFILE=laptop 2) REFRESH_VUS (10) LOGOUT_VUS (4) APP_VUS (6, laptop 3; 0 when ns apps does not exist) DURATION (60m: a cap only, cool-down stops k6; 10m ran out mid-switch in build #11)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -62,10 +62,11 @@ start)
   if [[ -z ${APP_VUS:-} ]] && ! kubectl get namespace apps >/dev/null 2>&1; then
     APP_VUS=0; log "WARN: no namespace apps: k6 scenario app off (APP_VUS=0)"
   fi
-  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} APP_VUS=${APP_VUS:-6} DURATION=${DURATION:-60m} \
+  : "${LOGIN_RATE:=$LOGIN_RATE_DEFAULT}" "${APP_VUS:=$APP_VUS_DEFAULT}" # per PROFILE (lib/kc.sh)
+  LOGIN_RATE=$LOGIN_RATE REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} APP_VUS=$APP_VUS DURATION=${DURATION:-60m} \
     envsubst < k8s/k6-job.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" wait pod -l job-name=k6 --for=condition=Ready --timeout=120s >/dev/null || die "k6 pod not Ready"
-  log "k6 started (rate ${LOGIN_RATE:-5}/s, app VUs ${APP_VUS:-6}, ${DURATION:-60m})"
+  log "k6 started (rate $LOGIN_RATE/s, app VUs $APP_VUS, ${DURATION:-60m})"
   ;;
 collect) collect ;;
 stop)

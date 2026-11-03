@@ -30,7 +30,8 @@ event switch from="$active" to="$idle"
 set_active "$idle" "$db" "$target"
 event flipped to="$idle" # Service patched: the flip happened in [switch, flipped] (gate: acrossflip)
 
-# 6. Graceful pod kill on each color while traffic moves (gated). PDB minAvailable 2 does not apply to deletes.
+# 6. Graceful pod kill on each color while traffic moves (gated). The PDB (minAvailable 2; laptop 1) does not apply to
+#    deletes. Pod -1 exists in both profiles (3 or 2 replicas); the others keep serving.
 old_uid=$(kubectl -n "$NS" get pod "kc-$idle-keycloak-1" -o jsonpath='{.metadata.uid}')
 for c in "$active" "$idle"; do
   kubectl -n "$NS" delete pod "kc-$c-keycloak-1" --wait=false >/dev/null
