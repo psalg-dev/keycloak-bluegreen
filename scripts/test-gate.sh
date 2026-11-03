@@ -63,6 +63,7 @@ app-kc-bc-notfound |shared|shared-base shared-inflight-ok app-shared app-shared-
 app-kc-fc-notfound |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-notfound |shared|1|frontchannel_ok=FAIL
 app-kc-me-200      |shared|shared-base shared-inflight-ok app-shared app-shared-log app-bc app-fc app-fc-event app-kc app-kc-bc-ok app-kc-fc-me200 |shared|1|frontchannel_ok=FAIL logout_effective=FAIL
 app-lossy-kc       |lossy |lossy-base app-lossy app-lossy-bc app-lossy-kc        |lossy |0|app_login_ok=PASS backchannel_delivered=PASS frontchannel_ok=PASS logout_effective=PASS
+app-lossy-kc-late  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-kc app-lossy-kc-latebc|lossy |0|logout_effective=PASS
 app-flip-no-event  |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy |1|app_login_ok=FAIL
 app-flip-flipped   |lossy |lossy-base app-lossy app-lossy-bc app-lossy-flip      |lossy-flipped|0|app_login_ok=PASS
 born-in-flip-nofl  |lossy |lossy-base lossy-born-in-flip                   |lossy |1|invalid_grant_in_window=FAIL

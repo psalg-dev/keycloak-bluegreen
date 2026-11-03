@@ -107,7 +107,10 @@ def logouts_judged: [$S[] | select(.after != []) | . as $s
   | . + {me: [.after[] | select(.status != 401)],
       calls: [($P[] | select(.sid == $s.sid and appcalls and .status == 200 and .upstream_status == 200 and .ts > $s.done)),
         ($A[] | select(.event == "call" and .sid == $s.sid and .status == 200 and .upstream_status == 200 and .ts > $s.done))],
-      delivered: (if (.reg | startswith("bc-")) then $A != [] and .sid != null and .lo != null and bcdelay != null else any(.fc[]; .status == 200) end)}
+      # within 10 s, as backchannel_delivered: a later back-channel call for this sid is not this logout's (laptop build
+      # #32: the rollback's session purge logged the app out 95 s later and made the logout look delivered)
+      delivered: (if (.reg | startswith("bc-")) then $A != [] and .sid != null and .lo != null and (bcdelay as $d | $d != null and $d <= 10)
+        else any(.fc[]; .status == 200) end)}
   | . + {exc: (.me != [] and .ini == "kc" and (.delivered | not) and lossok(.born; .lo))}];
 def r_logout_effective: logouts_judged as $all
   | [$all[] | select(.exc | not) | .me[]] as $me | [$all[] | .calls[]] as $c | [$all[] | select(.exc)] as $x
