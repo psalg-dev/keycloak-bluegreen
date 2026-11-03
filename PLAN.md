@@ -500,5 +500,16 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
   audience-check`, per-client compatibility mode) but the mapper is the correct fix.
 - Upgrade trap the other way (found live, build #16): Keycloak 25 ignores IdP JWKS keys without `use`
   (26 accepts them), so a 25 broker needs the IdP to publish `use: sig`. The legacy IdP stand-in does so now.
+- The lossy window really ends when ingress-nginx routes to the new color, not at the Service patch: `set_active`
+  waits for nginx's own upstream list (`wait_routed`), and the `flipped` event marks it. Sessions born on the old color
+  until then are lost on the new one (measured, excused up to `flipped` + grace).
+- Post-flip user race: a person created on the old color shortly before the flip who logs in on the new color before
+  the replay gets created a second time there (new id = new `sub`). The replay runs right after the flip to shrink
+  this, and repairs what slips through: the duplicate (created inside the window) is deleted and the original id
+  restored, so the first-issued `sub` wins; the duplicate's sessions die (silent re-login), and a downstream app may
+  have seen the other `sub` for seconds. Counted as `users_repaired`.
+- Rollback (lossy) deletes the old color's sessions created after the copy point before taking traffic back: they were
+  lost on the new color already, and a logout made there for such a session is impossible to carry back (Keycloak
+  logs only `LOGOUT_ERROR session_expired` for a session it never had), so keeping them would undo that logout.
 - In-flight admin/account writes: the freeze waits until the ingress answers 503 on both hosts plus a 2 s settle before
   the copy point, a fixed settle rather than request tracking.
