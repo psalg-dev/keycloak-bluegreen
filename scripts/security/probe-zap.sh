@@ -10,7 +10,9 @@ TAG=security
 
 kc=https://kc-net1.localtest.me/keycloak/realms/demo
 targets=(account "$kc/account"
-  login "$kc/protocol/openid-connect/auth?client_id=k6-app&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fapp.localtest.me%2Fcb")
+  login "$kc/protocol/openid-connect/auth?client_id=k6-app&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fapp.localtest.me%2Fcb&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256")
+# k6-app enforces PKCE: without a challenge Keycloak rejects the request and the spider fails (exit 3, kc-security #4);
+# a static S256 challenge (RFC 7636 example) is enough, the scan never completes a login
 for ((i = 0; i < ${#targets[@]}; i += 2)); do
   name=${targets[i]} url=${targets[i + 1]} rc=0
   # shellcheck disable=SC2016 # runs in the container: $0 = target; rules on stdin, report on stdout
