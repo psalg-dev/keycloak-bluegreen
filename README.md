@@ -46,6 +46,9 @@ Requirements: Docker with about 16 GB for the containers (measured peak 14.8 GiB
 below fits 10 GB), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
+`bash scripts/preflight.sh` (the launcher runs it first) checks exactly that: Docker daemon, Docker VM memory for the
+profile, ports 443 and 8081, the host tools and the DNS record, and stops with one sentence instead of failing halfway
+through a cluster build.
 
 ```bash
 bash scripts/jenkins-secret.sh

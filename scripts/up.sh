@@ -9,6 +9,10 @@ FROM=${FROM:-26.8.1}
 INGRESS_NGINX=controller-v1.15.1 # final release; ingress-nginx is EOL since March 2026 (user's prod edge)
 CNPG=1.30.1
 
+# Fail with one sentence when this machine cannot run the demo (ports, Docker memory, shells, DNS), not halfway
+# through a cluster build.
+scripts/preflight.sh
+
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config "$KIND_CONFIG" # per PROFILE (lib/kc.sh)
 kube_connect
 check_profile
