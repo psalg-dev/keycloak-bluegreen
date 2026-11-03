@@ -55,17 +55,25 @@ build_opts() {
   esac
 }
 
-# build_image <kc_version> [provider_version]: build + load into kind (skipped if the node already has it)
+# build_image <kc_version> [provider_version]: build + load into kind. Skips `docker build` when an image built from
+# exactly these inputs exists (label kc-bluegreen.inputs = hash of Dockerfile, provider + theme sources, build args):
+# even a fully cached build of the 1.1 GB image took ~28 s, ~45 s with kind load, twice per case.
 build_image() {
   local TAG=build
-  local tag opts; tag=$(image_tag "$1" "${2:-1}"); opts=$(build_opts "${1%%.*}")
-  log "building image $KC_IMAGE:$tag (provider jar + tests + kc.sh build; a new version takes minutes)"
-  # stream only the build-step headers ("#7 [ext 4/7] RUN mvn ... verify"), so a long build is visibly alive
-  docker build --progress=plain --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" --build-arg "KC_BUILD_OPTS=$opts" \
-    --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" \
-    -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . 2>&1 \
-    | { grep --line-buffered -E '^#[0-9]+ (\[|CACHED|DONE [0-9]+\.[0-9]+s$|ERROR)' || true; } | sed -u 's/^/  docker /' >&2
-  kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag"
+  local tag opts inputs; tag=$(image_tag "$1" "${2:-1}"); opts=$(build_opts "${1%%.*}")
+  inputs=$( { printf '%s\n' "$1" "$2" "$opts"; find images/keycloak providers/pom.xml providers/src themes -type f -print0 \
+    | sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
+  if [[ $(docker image inspect -f '{{index .Config.Labels "kc-bluegreen.inputs"}}' "$KC_IMAGE:$tag" 2>/dev/null) == "$inputs" ]]; then
+    log "image $KC_IMAGE:$tag is up to date (inputs $inputs): no rebuild"
+  else
+    log "building image $KC_IMAGE:$tag (inputs $inputs; provider jar + tests + kc.sh build; a new version takes minutes)"
+    # stream only the build-step headers ("#7 [ext 4/7] RUN mvn ... verify"), so a long build is visibly alive
+    docker build --progress=plain --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" --build-arg "KC_BUILD_OPTS=$opts" \
+      --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" --label "kc-bluegreen.inputs=$inputs" \
+      -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . 2>&1 \
+      | { grep --line-buffered -E '^#[0-9]+ (\[|CACHED|DONE [0-9]+\.[0-9]+s$|ERROR)' || true; } | sed -u 's/^/  docker /' >&2
+  fi
+  kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag" # skips nodes that have it
   log "image $KC_IMAGE:$tag loaded"
 }
 
