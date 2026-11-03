@@ -30,6 +30,10 @@ test apps (once built) log one JSON line per login/call/refresh/logout/introspec
 **Time.** All times are seconds relative to the first `switch` event (t = 0). k6 and the scripts share the host
 clock (KinD containers on one machine). A request belongs to the moment it started (`t_start`).
 
+**network latency** = each request's duration as the k6 client measures it (`t_end - t_start`): the network round
+trip plus the server's own processing (the demo has no server-side timing). The charts, the gate's `latency_*` rows
+and `latency_regression` all use it.
+
 **Windows** (report, the gate's `latency_*` rows and `latency_regression`; the shaded band in every time chart; one
 definition, `$W` in `scripts/gate/apps.jq`, half-open):
 

@@ -234,14 +234,14 @@ function renderCase(c, root) {
   const ovS = c.series, ovL = c.latency;
   if (ovS && ovL && ovL.all) {
     const cv = h('canvas');
-    root.append(h('h3', {}, 'Run overview: latency and errors (' + ovL.B + ' s buckets)'),
+    root.append(h('h3', {}, 'Run overview: network latency and errors (' + ovL.B + ' s buckets)'),
       h('div', { class: 'card' }, h('div', { class: 'chart' }, cv),
-        h('p', { class: 'legendnote' }, 'p50 / p95 / p99 of every judged request (left, ms, log) and errors per second (right). Shaded section: the cutover window(s) (definition in docs/failure-modes.md); solid vertical line: switch or rollback.')));
+        h('p', { class: 'legendnote' }, 'network latency: p50 / p95 / p99 of every judged request (left, ms, log; the client-observed request duration) and errors per second (right). Shaded section: the cutover window(s) (definition in docs/failure-modes.md); solid vertical line: switch or rollback.')));
     charts.push(() => {
       const ks = Object.keys(ovS.err || {});
       const tot = ovS.req.map((_, i) => ks.reduce((t, k) => t + ((ovS.err[k] || [])[i] || 0), 0));
-      const o = baseOpts(c, xr, 'ms (log)');
-      o.scales.y = { type: 'logarithmic', position: 'left', ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'ms (log)' }, grid: { color: css('--grid') }, border: { display: false } };
+      const o = baseOpts(c, xr, 'network latency (ms, log)');
+      o.scales.y = { type: 'logarithmic', position: 'left', ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'network latency (ms, log)' }, grid: { color: css('--grid') }, border: { display: false } };
       o.scales.y1 = { position: 'right', beginAtZero: true, ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'errors/s' }, grid: { drawOnChartArea: false }, border: { display: false } };
       const ds = ['p50', 'p95', 'p99'].map((p, j) => ({ label: p, yAxisID: 'y', data: ovL.all[p].map((y, i) => ({ x: xs(ovL, i, true), y })),
         borderColor: css(['--s1', '--s2', '--s3'][j]), backgroundColor: css(['--s1', '--s2', '--s3'][j]), borderWidth: 2, pointRadius: 0, pointHitRadius: 6, spanGaps: false }));
