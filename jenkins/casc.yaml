@@ -15,5 +15,11 @@ jenkins:
 unclassified:
   location:
     url: http://localhost:8081/
+appearance:
+  pipelineGraphView: # stage graph on the job page and each build page (off by default)
+    showGraphOnJobPage: true
+    showGraphOnBuildPage: true
+    showStageNames: true
+    showStageDurations: true
 jobs:
   - file: /repo/jenkins/jobs.groovy
