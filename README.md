@@ -23,7 +23,8 @@ session costs a redirect, not a password prompt; the demo makes that trade expli
 
 ## Run it
 
-Requirements: Docker with about 14 GB for the containers (see the laptop profile below for 16 GB machines), git,
+Requirements: Docker with about 16 GB for the containers (measured peak 13.6 GiB, see Results; the laptop profile
+below fits 10 GB), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
 
@@ -72,8 +73,8 @@ limit), 2 Postgres instances per cluster instead of 3 (synchronous replication k
 3 app VUs instead of 6, 2 ingress-nginx workers. Same images, config stages, switch scripts and gate rules.
 
 Measured over all five cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with Jenkins
-(rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The default profile peaks at about
-11.7 GiB. So give Docker Desktop / WSL2 about 10 GB (`.wslconfig`: `memory=10GB`), or skip Jenkins and use the
+(rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The default profile peaks at
+12.6 GiB / 13.6 GiB (Results). So give Docker Desktop / WSL2 about 10 GB (`.wslconfig`: `memory=10GB`), or skip Jenkins and use the
 launcher. Not shown on the laptop profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (here 1),
 the production PDB of 2 out of 3. Latency numbers are comparable within a run, not across profiles.
 
@@ -88,6 +89,48 @@ the production PDB of 2 out of 3. Latency numbers are comparable within a run, n
 - **Report** (`out/report.html`, one tab per case): error rates over time with the switch events marked, latency
   distributions before/during/after the cutover, and the failure-mode table with counts, rates and expected bounds.
   Definitions: [docs/failure-modes.md](docs/failure-modes.md).
+
+## Results
+
+Final run: Jenkins builds #33-#37, default profile, one fresh cluster, commit `f3d94e3`. Load throughout: 5 brokered
+logins/s, refreshes every 5 s, logouts with probes, discovery/JWKS reads, 6 app VUs through the two test apps.
+Every gate PASSes.
+
+| | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
+|---|---|---|---|---|---|
+| k6 requests | 29,030 | 32,183 | 53,345 | 69,243 | 56,739 |
+| 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.20 % (0.70 %) | 0.30 % (0.91 %) | 0.21 % (0.85 %) |
+| lossy window (copy point -> switch) | - | - | 115.2 s | 111.6 s | 112.6 s |
+| sessions lost = silent re-logins | 0 | 0 | 4 | 9 (+2 green-born, at the rollback) | 5 |
+| logouts / new users replayed | - | - | 21 / 82 | 19 / 84 forward, 30 / 90 back | 21 / 68 |
+| users repaired (post-flip race) | - | - | 0 | 1 | 0 |
+| resurrection window (switch -> replay done) | - | - | 49.3 s | 49.9 s, rollback 50.4 s | 46.5 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.3 s | 43.5 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 62.6 s (reverse replay) | - |
+| p95 latency pre / cutover / post | 57 / 70 / 61 ms | 68 / 76 / 72 ms | 81 / 96 / 93 ms | 105 / 119 / 121 ms | 141 / 155 / 152 ms |
+| step classes with cutover p95 > 2x | refresh 6.2x, introspection 3.4x, logout 2.2x, app calls 2.1x | introspection 2.8x | none | none | none |
+| schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
+
+Reading it:
+
+- The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
+  the flip (started on blue, finished on green: 29 / 69 / 42 in-flight logins broken, the user's next attempt goes
+  through legacy SSO), refreshes of sessions born in the lossy window (`invalid_grant`, then a silent re-login), and the
+  apps' back-/front-channel logouts for those sessions (Keycloak on green never knew them). No session born before the
+  copy point was lost, no logged-out session came back after the replay. One user in `minor-rollback` got a second
+  `sub` in the post-flip race; the replay repaired it (first `sub` restored), the gate excuses exactly that one.
+- The shared cases (same DB) lose nothing. Their slower classes fall in a cutover window that also holds a pod kill
+  (3 -> 2 pods for ~45 s): refresh p95 22 -> 137 ms in `patch`, far below any client timeout. `patch-rollback`, same
+  mechanism and pod kill, has only introspection over 2x (2.8x; refresh 1.5x): one machine, so expect run-to-run
+  spread of that size.
+- Admin and account console answer 503 from the copy point to the window end: 164-169 s per lossy switch, 112 s for
+  the lossy rollback. Login, token, refresh, logout, discovery and JWKS never stop.
+- Memory, default profile (`scripts/mem-sample.sh`, 15 s samples over all five cases): **12.6 GiB** peak for the four
+  KinD nodes, **13.6 GiB** with Jenkins, during the `major` switch (both colors, both Postgres clusters, green
+  migrating). Keycloak pod max 1.3 GiB, Postgres instance max 352 MiB.
+
+The full numbers, per failure mode and per step class, are in the report (one tab per case).
 
 ## More
 
