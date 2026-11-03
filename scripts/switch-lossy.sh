@@ -34,9 +34,17 @@ done
 [[ $(psql_db "$new" "select pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn") == t ]] || die "$new never caught up to $lsn"
 
 # 5. Promote. From here blue's writes reach only pg-$src (lost unless replayed).
+promote_at=$(date -u +%FT%TZ)
 kubectl -n "$NS" patch "cluster.postgresql.cnpg.io/$new" --type merge -p '{"spec":{"replica":{"enabled":false}}}' >/dev/null
 for _ in $(seq 120); do [[ $(psql_db "$new" "select pg_is_in_recovery()" 2>/dev/null) == f ]] && break; sleep 1; done
 [[ $(psql_db "$new" "select pg_is_in_recovery()") == f ]] || die "$new not promoted"
+# The promote changes archive_mode (restart-only), so CNPG then restarts every instance, the primary last with a smart
+# shutdown that waits for clients. Green must not connect before that is over (build #10: migrated into it, psql died).
+# ponytail: relies on CNPG always flipping Ready after a promote; if a version stops doing that this waits the full 600 s.
+ready_after() { kubectl -n "$NS" get "cluster.postgresql.cnpg.io/$new" -o json | jq -e --arg t "$promote_at" \
+  '.status.conditions[] | select(.type == "Ready" and .status == "True" and .lastTransitionTime >= $t)' >/dev/null; }
+for _ in $(seq 300); do ready_after && break; sleep 2; done
+ready_after || die "$new not Ready again after the promote's restart"
 event promoted db="$new"
 
 # 6. Green on its own DB: the new version migrates the schema on first start. Same credentials (physical copy).

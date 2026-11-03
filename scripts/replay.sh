@@ -44,6 +44,10 @@ while read -r l; do
       jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, enabled: true, emailVerified: true,
            attributes, federatedIdentities}]}' <<<"$l" \
         | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$l")"
+      # SKIP also skips silently when <to> already has that username under ANOTHER id (the person logged in on <to>
+      # before this replay): then their `sub` changed. Fail loudly instead.
+      [[ $(admin_api GET "/realms/demo/users/$(jq -r .userId <<<"$l")" -o /dev/null -w '%{http_code}' || true) == 200 ]] \
+        || die "replay user $(jq -r .username <<<"$l"): id $(jq -r .userId <<<"$l") not on $to (username taken by another id: sub changed)"
       users=$((users + 1)) ;;
     REVOKE_GRANT)
       sid=$(jq -r '.sessionId // empty' <<<"$l")
