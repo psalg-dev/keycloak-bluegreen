@@ -30,6 +30,8 @@ probe-after-replay |lossy |lossy-base lossy-probe-ok                       |loss
 pre-copy-grant     |lossy |lossy-base lossy-pre-copy-ig                    |lossy |1|refresh_pre_copy=FAIL invalid_grant_in_window=FAIL
 sub-change         |lossy |lossy-base lossy-sub-change                     |lossy |1|sub_stable=FAIL
 sub-change-repaired|lossy |lossy-base lossy-sub-change                     |lossy-repaired|0|sub_stable=PASS users_repaired=INFO
+repaired-dup-lost  |lossy |lossy-base lossy-repaired-dup                   |lossy-repaired-dup|0|invalid_grant_in_window=PASS relogin_ok=PASS
+repaired-dup-norep |lossy |lossy-base lossy-repaired-dup                   |lossy |1|invalid_grant_in_window=FAIL
 window-ok-on-green |lossy |lossy-base lossy-window-ok                      |lossy |1|window_exercised=FAIL
 pass-shared-rb     |shared-rollback|shared-rb-base shared-rb-inflight        |shared-rollback|0|inflight_login=PASS inflight_login_rollback=PASS refresh_blue_after_rollback=PASS refresh_green_after_rollback=PASS
 shared-rb-5xx      |shared-rollback|shared-rb-base shared-rb-inflight shared-rb-5xx|shared-rollback|1|no_5xx=FAIL

@@ -78,16 +78,19 @@ def r_refresh_green_after_rollback: if $sw == null or $rb == null then skip("nee
   refresh_ok($sw; $rb; $rb; "in [switch, rollback)"; "rollback") end;
 def r_refresh_pre_copy: if $cp == null or $sw == null then skip("needs copy_point + switch") else
   refresh_ok(-1e18; $cp; $sw; "before copy_point"; "switch") end;
+# repok: the line's user was repaired by a replay (scripts/replay.sh deleted the duplicate the new color had made, so
+# that duplicate's sessions died after the switch: a silent re-login, the documented price of keeping the first sub)
+def repok: (.user // "") as $u | $u != "" and ($u | IN($repaired[])) and .ts >= $sw;
 def r_invalid_grant_in_window: if $cp == null or $sw == null then skip("needs copy_point + switch") else
-  [$L[] | select(.step == "refresh" and ig)] as $a | [$a[] | select(lossok(born; .ts) | not)] as $b
-  | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) on sessions not born in [copy_point, switch]") + {bad: $b} end;
+  [$L[] | select(.step == "refresh" and ig)] as $a | [$a[] | select((lossok(born; .ts) or repok) | not)] as $b
+  | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) on sessions not born in [copy_point, flip] (\([$a[] | select(repok)] | n) excused: a repaired user's duplicate)") + {bad: $b} end;
 def r_logout_after_replay: if $mode == "lossy-rollback" then if $rd == null or $rb == null then skip("needs replay_done + rollback") else
   probes_ig($rd; $rb; "replay_done+\($grace)s and before rollback") end
   else if $rd == null then skip("no replay_done event") else probes_ig($rd; 1e18; "replay_done+\($grace)s") end end;
 def r_invalid_grant_phases: if $cp == null or $sw == null or $rb == null then skip("needs copy_point + switch + rollback") else
   [$L[] | select(.step == "refresh" and ig)] as $a
-  | [$a[] | select(lossok(born; .ts) | not)] as $b
-  | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) not (born in [copy_point, switch] and lost in [switch, rollback+\($grace)s)) nor (born in (switch, rollback) and lost after rollback)") + {bad: $b} end;
+  | [$a[] | select((lossok(born; .ts) or repok) | not)] as $b
+  | verdict($b == []; "\($a | n) refresh invalid_grant, \($b | n) not (born in [copy_point, flip] and lost after the switch) nor (born in (switch, rollback flip) and lost after rollback) nor a repaired user's duplicate") + {bad: $b} end;
 def r_relogin_ok: [$L[] | select(.step == "refresh" and ig)] as $a
   | [$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200)] as $ok
   | [$a[] | . as $i | select(any($ok[]; .user == $i.user and .net == $i.net and .ts >= $i.te) | not)] as $b
