@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # load.sh start|stop|collect: the k6 Job in namespace `load` (k8s/k6-job.yaml.tpl, script load/k6/flows.js).
 #   start    copies the Secrets it needs into `load`, (re)creates ConfigMap k6-flows and Job k6
-#   collect  writes k6's JSON lines (schema: top of flows.js) to out/k6.jsonl; works while k6 runs
+#   collect  writes k6's JSON lines (schema: top of flows.js) to out/k6.jsonl and the test apps' JSON lines
+#            (docs/test-apps-contract.md) since the load started to out/apps.jsonl; works while k6 runs
 #   stop     stops k6 gracefully (SIGINT), collects, deletes the Job
-# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) DURATION (10m)
+# Env: LOGIN_RATE (5) REFRESH_VUS (10) LOGOUT_VUS (4) APP_VUS (6; 0 when ns apps does not exist) DURATION (10m)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -26,6 +27,29 @@ collect() {
   mkdir -p out
   kubectl -n "$LNS" exec "$p" -- cat /out/k6.log | jq -cR 'fromjson? | select(type == "object" and has("t_start"))' > out/k6.jsonl
   log "collected $(wc -l < out/k6.jsonl) k6 lines -> out/k6.jsonl"
+  collect_apps "$p"
+}
+
+# collect_apps <k6-pod>: testclient + testresource JSON lines since the k6 pod started (= load start) -> out/apps.jsonl.
+# Pods found via each Service's selector (the contract names only the Services). No ns apps: empty file, gate SKIPs.
+# ponytail: `kubectl logs` serves only the CURRENT log file, and kubelet rotates container logs at 10 MiB
+# (containerLogMaxSize), so a long or chatty run silently loses its oldest app lines (a pod restart loses the previous
+# container's). The gate judges back-channel/front-channel delivery only inside the time range it got. If that bites:
+# write to a file on an emptyDir like k6 does (k8s/k6-job.yaml.tpl), or ship logs.
+collect_apps() {
+  : > out/apps.jsonl
+  kubectl get namespace apps >/dev/null 2>&1 || { log "WARN: no namespace apps: out/apps.jsonl is empty"; return 0; }
+  local since app sel
+  since=$(kubectl -n "$LNS" get "$1" -o jsonpath='{.status.startTime}')
+  for app in testclient testresource; do
+    sel=$(kubectl -n apps get svc "$app" -o json 2>/dev/null | jq -r '.spec.selector // {} | to_entries | map("\(.key)=\(.value)") | join(",")') || true
+    [[ -n $sel ]] || { log "WARN: no Service $app (or no selector) in ns apps: its lines are missing"; continue; }
+    # --tail=-1: with a selector kubectl logs defaults to the last 10 lines
+    kubectl -n apps logs -l "$sel" --since-time="$since" --tail=-1 --max-log-requests=5 \
+      | jq -cR 'fromjson? | select(type == "object" and has("app"))' >> out/apps.jsonl \
+      || log "WARN: kubectl logs for $app failed: its lines are missing"
+  done
+  log "collected $(wc -l < out/apps.jsonl) app lines (since $since) -> out/apps.jsonl"
 }
 
 case ${1:-} in
@@ -34,10 +58,14 @@ start)
   for s in "${!SRC[@]}"; do copy_secret "$s" "${SRC[$s]}"; done
   kubectl -n "$LNS" create configmap k6-flows --from-file=flows.js=load/k6/flows.js --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" delete job k6 --ignore-not-found --wait >/dev/null
-  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} DURATION=${DURATION:-10m} \
+  # no test apps yet: no app scenario, so the run stays judgeable (its logins would all fail on the ingress 404)
+  if [[ -z ${APP_VUS:-} ]] && ! kubectl get namespace apps >/dev/null 2>&1; then
+    APP_VUS=0; log "WARN: no namespace apps: k6 scenario app off (APP_VUS=0)"
+  fi
+  LOGIN_RATE=${LOGIN_RATE:-5} REFRESH_VUS=${REFRESH_VUS:-10} LOGOUT_VUS=${LOGOUT_VUS:-4} APP_VUS=${APP_VUS:-6} DURATION=${DURATION:-10m} \
     envsubst < k8s/k6-job.yaml.tpl | kubectl apply -f - >/dev/null
   kubectl -n "$LNS" wait pod -l job-name=k6 --for=condition=Ready --timeout=120s >/dev/null || die "k6 pod not Ready"
-  log "k6 started (rate ${LOGIN_RATE:-5}/s, ${DURATION:-10m})"
+  log "k6 started (rate ${LOGIN_RATE:-5}/s, app VUs ${APP_VUS:-6}, ${DURATION:-10m})"
   ;;
 collect) collect ;;
 stop)

@@ -1,4 +1,4 @@
-# k6 load Job (envsubst: LOGIN_RATE REFRESH_VUS LOGOUT_VUS DURATION). Rendered + applied by scripts/load.sh start.
+# k6 load Job (envsubst: LOGIN_RATE REFRESH_VUS LOGOUT_VUS APP_VUS DURATION). Rendered + applied by scripts/load.sh start.
 # Talks to the public URLs via ingress (CoreDNS rewrite), so it needs no kc-<color>-keycloak-client label.
 # TLS: Go honours SSL_CERT_FILE, so k6 trusts the demo CA without insecureSkipTLSVerify (verified with k6 2.3.0).
 # ponytail: k6's lines go to a file on an emptyDir and the container then sleeps; `load.sh collect` cats the file.
@@ -26,6 +26,7 @@ spec:
             - { name: LOGIN_RATE, value: "${LOGIN_RATE}" }
             - { name: REFRESH_VUS, value: "${REFRESH_VUS}" }
             - { name: LOGOUT_VUS, value: "${LOGOUT_VUS}" }
+            - { name: APP_VUS, value: "${APP_VUS}" }
             - { name: DURATION, value: "${DURATION}" }
             - { name: SSL_CERT_FILE, value: /ca/ca.crt }
             - name: K6_APP_SECRET
