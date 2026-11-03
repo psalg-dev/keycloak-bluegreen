@@ -9,8 +9,9 @@ FROM=${FROM:-26.8.1}
 INGRESS_NGINX=controller-v1.15.1 # final release; ingress-nginx is EOL since March 2026 (user's prod edge)
 CNPG=1.30.1
 
-kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config kind/cluster.yaml
+kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config "$KIND_CONFIG" # per PROFILE (lib/kc.sh)
 kube_connect
+check_profile
 
 kubectl apply -f "https://raw.githubusercontent.com/kubernetes/ingress-nginx/$INGRESS_NGINX/deploy/static/provider/kind/deploy.yaml" >/dev/null
 kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeout=300s >/dev/null
@@ -27,9 +28,10 @@ kubectl -n ingress-nginx rollout status deploy/ingress-nginx-controller --timeou
 kubectl apply -f k8s/edge/ingress-nginx.yaml >/dev/null
 # shellcheck disable=SC2016 # nginx variables, literal
 kubectl -n ingress-nginx patch configmap ingress-nginx-controller --type merge -p "$(jq -nc \
-  --arg h "$(sha256sum k8s/edge/ingress-nginx.yaml | cut -c1-16)" '{metadata: {annotations: {"kc-bluegreen/edge": $h}},
-  data: {"server-snippet": "if ($http_host != $host) { return 421; }",
-    "proxy-set-headers": "ingress-nginx/kc-proxy-headers", "add-headers": "ingress-nginx/kc-response-headers"}}')" >/dev/null
+  --arg h "$(sha256sum k8s/edge/ingress-nginx.yaml | cut -c1-16)" --arg w "$NGINX_WORKERS" '{metadata: {annotations: {"kc-bluegreen/edge": $h}},
+  data: ({"server-snippet": "if ($http_host != $host) { return 421; }",
+    "proxy-set-headers": "ingress-nginx/kc-proxy-headers", "add-headers": "ingress-nginx/kc-response-headers"}
+    + if $w == "" then {} else {"worker-processes": $w} end)}')" >/dev/null # NGINX_WORKERS: PROFILE=laptop only
 log "ingress-nginx ready"
 
 # *.localtest.me -> ingress inside the cluster too, so pods use the same URLs as the host browser.

@@ -35,15 +35,16 @@ explain() {
     warmup) title="Load + warm-up" text="Start k6 in the cluster: brokered logins on net1/net2, refreshes every 5 s, logouts with probes that must stay logged out, discovery/JWKS reads. ${WARMUP_SECONDS:-120} s so sessions exist BEFORE the switch." ;;
     switch)
       case $mech in
-        shared*) title="Switch (shared DB)" text="Green $to (provider v$tp) next to blue on the same pg-1, own Infinispan cluster; online config through green; flip kc-active; kill one pod per color mid-traffic; drain blue${keep_old}." ;;
+        shared*) title="Switch (shared DB)" text="Green $to (provider v$tp) next to blue on the same pg-1, own Infinispan cluster; online config through green; flip kc-active; kill one of the $KC_REPLICAS pods per color mid-traffic; drain blue${keep_old}." ;;
         lossy*) title="Switch (lossy overlap)" text="Green's own DB = streaming replica of pg-1; freeze admin/account only; copy point; promote; green $to migrates the schema on its copy; replay blue's logouts + user creations onto green; flip; replay again after the drain. Login/token never stop.${keep_db}" ;;
       esac ;;
     rollback) title="Soak + rollback" text="Let traffic run ${SOAK_SECONDS:-90} s on the new color (new sessions, logouts), then roll back to blue. Shared DB: just the flip. Own DB: back to blue's old DB, after reverse-replaying green's logouts and user creations." ;;
     cooldown) title="Cool-down" text="Keep k6 running ${COOLDOWN_SECONDS:-90} s on the final color: the gate needs refreshes of older sessions and logout probes AFTER the switch/replay. Then stop k6 (requests it aborts itself are excluded) and collect its lines into out/$what/." ;;
     gate) title="Gate" text="Judge out/$what/ (k6 lines + switch events): no 5xx, issuer stable per network, same sub per user, in-flight logins and refresh tokens survive, logged-out sessions stay logged out (+ the $mech rules)." ;;
   esac
-  local kind=${TAG^^}
-  TAG='' log "=== [$n/${#phases[@]}] $kind | $title ($what: $from -> $to, $db)"
+  local kind=${TAG^^} prof=""
+  if [[ $PROFILE != default ]]; then prof=", PROFILE=$PROFILE"; fi
+  TAG='' log "=== [$n/${#phases[@]}] $kind | $title ($what: $from -> $to, $db$prof)"
   fold -s -w 110 <<<"$text" | sed 's/^/    /' >&2
 }
 

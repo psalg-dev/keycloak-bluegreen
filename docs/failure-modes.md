@@ -46,7 +46,8 @@ The gate's own windows are event boundaries, used per rule: before/after `switch
 SIGINT, not server behaviour; they are counted ("aborted") and judged by no rule. Logins still in their think time at
 the end of the data (no failed hop, no token, last hop < 30 s before the end) are not judged.
 
-**Limits.** One machine (KinD, 3 nodes in Docker, 3 Keycloak pods per color, CNPG Postgres in-cluster): k6, both
+**Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, CNPG Postgres in-cluster;
+`PROFILE=laptop`: 2 workers, 2 pods per color, 2 Postgres instances, ~2 logins/s): k6, both
 colors, Postgres and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
 absolute capacity numbers. Synthetic load at a fixed, modest rate (~5 logins/s): rare races need far more traffic to
 show up. One run per case: a count of 0 is "not seen in this run", not a probability; compare rates across runs before
