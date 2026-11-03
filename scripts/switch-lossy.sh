@@ -60,11 +60,14 @@ scripts/check-cluster.sh "$idle"
 scripts/config.sh online "$idle"
 [[ ${RUN_MAINTENANCE:-false} =~ ^(true|1)$ ]] && scripts/config.sh maintenance "$idle"
 
-# 8-10. Replay, switch, drain, replay again (catches what blue wrote during the drain).
+# 8-10. Replay, switch, replay at once, drain, replay again (catches what blue wrote during the drain).
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event switch from="$active" to="$idle"
 set_active "$idle" "$new" "$target"
-event flipped to="$idle" # Service patched: the flip happened in [switch, flipped] (gate: acrossflip)
+event flipped to="$idle" # ingress-nginx routes to the new color now (set_active waits for it; gate: acrossflip)
+# right away: users the old color created since the first replay, before the person logs in on the new color and it
+# makes a duplicate (replay.sh repairs any that slip through); the post-drain replay below catches in-flight stragglers
+scripts/replay.sh "$active" "$idle" "$copy_iso"
 sleep "${DRAIN_SECONDS:-15}"
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event replay_done

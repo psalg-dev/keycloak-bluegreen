@@ -26,6 +26,7 @@ lossy_seconds	length of the window in which new sessions on the old version will
 sessions_lost	how many users had to re-login because of the upgrade (silent via SSO here; visible if the IdP session had expired)
 relogins	how many silent re-logins the lost sessions caused: extra load on Keycloak and the legacy IdP right after the cutover
 logouts_replayed	logouts carried over from the old version; each one would otherwise be a resurrected session
+users_repaired	users who logged in on the new color between the flip and the replay, so it created them twice; the replay restored the original id, but their sub differed for seconds (a downstream app may have seen a stranger)
 users_replayed	users first created on the old version during the window; each one would otherwise get a new sub on the new version
 resurrection_seconds	time during which a logout made on the old version could still be undone on the new one: the security exposure window
 green_sessions_lost	sessions created on the new version that a lossy rollback throws away (users re-login once)

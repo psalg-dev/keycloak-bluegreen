@@ -32,6 +32,7 @@ else
   event rollback from="$cur" to="$old"
   set_active "$old" "$olddb" "$oldv"
   event flipped to="$old"
+  scripts/replay.sh "$cur" "$old" "$since" # at once, see switch-lossy.sh
   sleep "${DRAIN_SECONDS:-15}"
   scripts/replay.sh "$cur" "$old" "$since"
   event rollback_replay_done

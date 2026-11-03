@@ -22,6 +22,9 @@ def secs: if . == null then "n/a" else (. * 100 | round) / 100 end;
 | ev("switch") as $sw | ev("copy_point") as $cp | ev("replay_done") as $rd
 | ev("rollback_start") as $rbs | ev("rollback") as $rb | ev("rollback_replay_done") as $rrd
 | ([$e[] | select(.event == "switch") | .to] | .[0]) as $new
+# users a replay found duplicated on its target (created there after the flip, before the replay) and restored to the
+# original id (scripts/replay.sh): their sub changed for seconds; counted, and excused in the sub rules
+| ([$e[] | select(.event == "replay") | .repaired // "" | split(" ")[] | select(. != "")] | unique) as $repaired
 | ([$L[] | select(.step == "login_token" and .status == 200) | {key: .login_id, value: .te}] | from_entries) as $born
 | def born: $born[.login_id // ""];
 # A flip's moment is known only as [switch, flipped] (rollback: [rollback, flipped]): the event is written before
@@ -58,8 +61,9 @@ def r_issuer_stable: [$L[] | select(.iss != null)] as $a
 def r_no_5xx: [$L[] | select(.status >= 500 or .status == 0)] as $b
   | verdict($b == []; "\($b | n) of \($L | n) responses >= 500 or status 0 (\($aborted | n) aborted by the k6 stop, not judged)") + {bad: $b};
 def r_sub_stable: [$L[] | select(.sub != null and .user != null)] | group_by(.user)
-  | [.[] | select(map(.sub) | unique | n > 1)] as $b
-  | verdict($b == []; "\(n) users, \($b | n) with more than one sub") + {bad: [$b[] | {user: .[0].user, subs: (map(.sub) | unique)}]};
+  | [.[] | select(map(.sub) | unique | n > 1)] as $c | [$c[] | select(.[0].user | IN($repaired[]) | not)] as $b
+  | verdict($b == []; "\(n) users, \($b | n) with more than one sub (\(($c | n) - ($b | n)) excused: repaired by the replay, first sub restored)")
+    + {bad: [$b[] | {user: .[0].user, subs: (map(.sub) | unique)}]};
 def r_inflight_login: if $sw == null then skip("no switch event") else inflight($sw; "switch") end;
 def r_inflight_login_rollback: if $rb == null then skip("no rollback event") else inflight($rb; "rollback") end;
 def r_refresh_across_switch: if $sw == null then skip("no switch event") else refresh_ok(-1e18; $sw; $sw; "before switch"; "it") end;
@@ -93,7 +97,8 @@ def r_logout_after_rollback_replay: if $rrd == null then skip("no rollback_repla
   probes_ig($rrd; 1e18; "rollback_replay_done+\($grace)s") end;
 def r_green_users_sub_kept: if $sw == null or $rb == null then skip("needs switch + rollback") else
   [$L[] | select(.sub != null and .user != null)] | group_by(.user) | map(sort_by(.ts))
-  | [.[] | select(.[0].ts >= $sw and .[0].ts < $rb and any(.[]; .ts >= $rb))] as $g | [$g[] | select(map(.sub) | unique | n > 1)] as $b
+  | [.[] | select(.[0].ts >= $sw and .[0].ts < $rb and any(.[]; .ts >= $rb))] as $g
+  | [$g[] | select((map(.sub) | unique | n > 1) and (.[0].user | IN($repaired[]) | not))] as $b
   | if $g == [] then skip("no user first seen in [switch, rollback) has a token after rollback") else
     verdict($b == []; "\($g | n) users first seen on green with a token after rollback, \($b | n) with a changed sub")
     + {bad: [$b[] | {user: .[0].user, subs: (map(.sub) | unique)}]} end end;

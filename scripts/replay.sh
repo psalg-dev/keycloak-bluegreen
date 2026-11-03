@@ -30,6 +30,15 @@ apply() {
   [[ $code == 2?? || $code == 404 ]] || die "replay $1: $2 $3 -> HTTP ${code:-none}"
 }
 
+import_user() { # replay line -> partialImport of that user with its original id (SKIP if the id or username exists)
+  jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled: true, emailVerified: true,
+       attributes, federatedIdentities}]}' <<<"$1" \
+    | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$1")"
+}
+has_user() { [[ $(admin_api GET "/realms/demo/users/$1" -o /dev/null -w '%{http_code}' || true) == 200 ]]; }
+since_ms=$(( $(date -u -d "$since" +%s) * 1000 ))
+repaired=()
+
 admin_direct_start "$to"
 trap admin_direct_stop EXIT
 realm_id=$(admin_api GET /realms/demo | jq -r .id)
@@ -43,13 +52,22 @@ while read -r l; do
       apply logout DELETE "/realms/demo/sessions/$sid"
       logouts=$((logouts + 1)) ;;
     REGISTER)
-      jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled: true, emailVerified: true,
-           attributes, federatedIdentities}]}' <<<"$l" \
-        | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$l")"
-      # SKIP also skips silently when <to> already has that username under ANOTHER id (the person logged in on <to>
-      # before this replay): then their `sub` changed. Fail loudly instead.
-      [[ $(admin_api GET "/realms/demo/users/$(jq -r .userId <<<"$l")" -o /dev/null -w '%{http_code}' || true) == 200 ]] \
-        || die "replay user $(jq -r .username <<<"$l"): id $(jq -r .userId <<<"$l") not on $to (username taken by another id: sub changed)"
+      import_user "$l"
+      # SKIP also skips silently when <to> already has that username under ANOTHER id: the person logged in on <to>
+      # after the flip, before this replay, and <to> made a new user (laptop build #28, rollback). Inside the window that
+      # duplicate is the race's: delete it and import the original, so the first-issued `sub` wins (the duplicate's
+      # sessions die: a silent re-login). An older conflict is not ours to resolve: fail.
+      if ! has_user "$(jq -r .userId <<<"$l")"; then
+        u=$(jq -r .username <<<"$l")
+        dup=$(admin_api GET "/realms/demo/users?username=$u&exact=true" | jq -c '.[0] // empty')
+        [[ -n $dup && $(jq -r .createdTimestamp <<<"$dup") -ge $since_ms ]] \
+          || die "replay user $u: id $(jq -r .userId <<<"$l") not on $to, and the username's user there predates the window: sub changed"
+        log "repair $u: $to created it again ($(jq -r .id <<<"$dup")) after the flip; restoring the original id"
+        apply repair DELETE "/realms/demo/users/$(jq -r .id <<<"$dup")"
+        import_user "$l"
+        has_user "$(jq -r .userId <<<"$l")" || die "replay user $u: repair failed"
+        repaired+=("$u")
+      fi
       users=$((users + 1)) ;;
     REVOKE_GRANT)
       sid=$(jq -r '.sessionId // empty' <<<"$l")
@@ -58,5 +76,6 @@ while read -r l; do
       revokes=$((revokes + 1)) ;;
   esac
 done < "$lines"
-event replay from="$from" to="$to" since="$since" logouts="$logouts" users="$users" revokes="$revokes"
-log "replayed $from -> $to since $since: $logouts logouts, $users users, $revokes revokes"
+event replay from="$from" to="$to" since="$since" logouts="$logouts" users="$users" revokes="$revokes" \
+  repaired="${repaired[*]}"
+log "replayed $from -> $to since $since: $logouts logouts, $users users, $revokes revokes, ${#repaired[@]} repaired${repaired:+ (${repaired[*]})}"

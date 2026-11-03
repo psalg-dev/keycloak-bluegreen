@@ -176,6 +176,7 @@ rule sessions_lost 'info([$L[] | select(.step == "refresh" and ig) | .login_id] 
 rule relogins 'info([$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200)] | n)'
 rule logouts_replayed 'info([$e[] | select((.event | startswith("replay")) and ($new == null or .from != $new)) | .logouts // empty | tonumber] | max // "n/a")'
 rule users_replayed 'info([$e[] | select((.event | startswith("replay")) and ($new == null or .from != $new)) | .users // empty | tonumber] | max // "n/a")'
+rule users_repaired 'info("\($repaired | n)\(if $repaired == [] then "" else " (\($repaired | join(" ")))" end)")'
 rule resurrection_seconds 'info(if $sw and $rd then $rd - $sw else null end | secs)'
 }
 # shellcheck disable=SC2016
