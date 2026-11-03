@@ -51,7 +51,10 @@ jq -n --arg job "$job" --arg color "$color" --arg image "$cli" --argjson managed
                {name:\"IMPORT_BEHAVIORS_CHECKSUMWITHCACHEKEY\", value:\"false\"},
                {name:\"KC_CONFIG_CLI_SECRET\", valueFrom:{secretKeyRef:{name:\"kc-config-cli\", key:\"secret\"}}},
                {name:\"LEGACY_BROKER_SECRET\", valueFrom:{secretKeyRef:{name:\"legacy-broker\", key:\"client-secret\"}}},
-               {name:\"K6_APP_SECRET\", valueFrom:{secretKeyRef:{name:\"k6-app\", key:\"secret\"}}}]
+               {name:\"K6_APP_SECRET\", valueFrom:{secretKeyRef:{name:\"k6-app\", key:\"secret\"}}},
+               {name:\"TESTCLIENT_BC_SECRET\", valueFrom:{secretKeyRef:{name:\"test-apps\", key:\"testclient-bc\"}}},
+               {name:\"TESTCLIENT_FC_SECRET\", valueFrom:{secretKeyRef:{name:\"test-apps\", key:\"testclient-fc\"}}},
+               {name:\"TESTRESOURCE_SECRET\", valueFrom:{secretKeyRef:{name:\"test-apps\", key:\"testresource\"}}}]
                + $auth + \$managed)}]}}}}" | kubectl apply -f - >/dev/null
 
 if ! kubectl -n "$NS" wait "job/$job" --for=condition=complete --timeout=600s >/dev/null 2>&1; then
