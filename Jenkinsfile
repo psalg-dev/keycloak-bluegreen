@@ -44,7 +44,9 @@ kube_connect
       script {
         if (currentBuild.currentResult == 'FAILURE') {
           sh '''#!/usr/bin/env bash
-scripts/load.sh stop || true
+. scripts/lib/kc.sh
+# only while k6 still runs (a failed gate comes after cool-down already stopped it)
+if kubectl -n load get job k6 >/dev/null 2>&1; then scripts/load.sh stop || true; fi
 '''
         }
       }
