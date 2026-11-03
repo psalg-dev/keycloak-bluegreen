@@ -49,12 +49,13 @@ scripts/load.sh stop 2>/dev/null || true
       // builds left there (the workspace keeps out/; docs/failure-modes.md says how to reset it). In post, not a stage, so it
       // also runs when a stage or the gate failed. A report failure marks the build UNSTABLE, never hides the result.
       script {
-        withEnv(["BUILD_START=${currentBuild.startTimeInMillis.intdiv(1000)}"]) {
+        withEnv(["BUILD_START_MS=${currentBuild.startTimeInMillis}"]) {
           int rc = sh(returnStatus: true, script: '''#!/usr/bin/env bash
 set -euo pipefail
+start=$((BUILD_START_MS / 1000))
 # build/commit for the case dirs THIS build wrote (k6.jsonl newer than the build start); older dirs keep theirs
 for k in out/*/k6.jsonl; do
-  [[ -f $k && $(stat -c %Y "$k") -ge $BUILD_START ]] || continue
+  [[ -f $k && $(stat -c %Y "$k") -ge $start ]] || continue
   jq -n --arg build "$BUILD_NUMBER" --arg commit "${GIT_COMMIT:-}" --arg url "${BUILD_URL:-}" \\
     '{build: $build, commit: $commit, url: $url}' > "${k%/k6.jsonl}/meta.json"
 done
