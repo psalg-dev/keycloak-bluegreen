@@ -12,8 +12,10 @@ c=(curl -sf -u "admin:$(cat out/jenkins-admin-password)" -b "$jar" -c "$jar")
 if [[ -n ${ATTACH:-} ]]; then build=${ATTACH%/}/; else
   crumb=$("${c[@]}" "$J/crumbIssuer/api/json" | jq -r '.crumbRequestField + ":" + .crumb')
   args=(); for kv in "$@"; do args+=(--data-urlencode "$kv"); done
-  queue=$("${c[@]}" -X POST -H "$crumb" "${args[@]}" -D - -o /dev/null "$J/job/$job/buildWithParameters" \
-    | tr -d '\r' | awk 'tolower($1) == "location:" {print $2}')
+  # a job without parameters (kc-kcwarden) answers 400 to buildWithParameters: then plain build
+  trigger() { "${c[@]}" -X POST -H "$crumb" "${args[@]}" -D - -o /dev/null "$J/job/$job/$1" \
+    | tr -d '\r' | awk 'tolower($1) == "location:" {print $2}'; }
+  queue=$(trigger buildWithParameters) || { (($# == 0)) && queue=$(trigger build); } || queue=
   [[ -n $queue ]] || { echo "trigger failed" >&2; exit 1; }
 
   build=
