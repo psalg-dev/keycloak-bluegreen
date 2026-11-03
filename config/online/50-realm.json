@@ -40,14 +40,6 @@
       ]
     },
     {
-      "clientId": "realm-management",
-      "optionalClientScopes": [
-        "address",
-        "phone",
-        "microprofile-jwt"
-      ]
-    },
-    {
       "clientId": "security-admin-console",
       "optionalClientScopes": [
         "address",
