@@ -57,6 +57,26 @@ Admin console: <https://kc-net1.localtest.me/keycloak/admin> (trust `out/certs/c
 
 Tear down: `bash scripts/down.sh`, then `docker compose down -v`.
 
+### On a 16 GB laptop
+
+```bash
+PROFILE=laptop docker compose run --rm launcher
+```
+
+Then run cases with `PROFILE=laptop` (Jenkins build parameter, or
+`PROFILE=laptop docker compose run --rm launcher bash scripts/demo.sh all`). The profile is recorded on the cluster;
+a run with a different `PROFILE` stops before it changes anything.
+
+Laptop = 2 KinD workers (zones a, b) instead of 3, 2 Keycloak pods per color instead of 3 (PDB 1 of 2, 1 GiB memory
+limit), 2 Postgres instances per cluster instead of 3 (synchronous replication kept), 2 logins/s instead of 5,
+3 app VUs instead of 6, 2 ingress-nginx workers. Same images, config stages, switch scripts and gate rules.
+
+Measured over all five cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with Jenkins
+(rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The default profile peaks at about
+11.7 GiB. So give Docker Desktop / WSL2 about 10 GB (`.wslconfig`: `memory=10GB`), or skip Jenkins and use the
+launcher. Not shown on the laptop profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (here 1),
+the production PDB of 2 out of 3. Latency numbers are comparable within a run, not across profiles.
+
 ## How a run is judged
 
 - **Gate** (`scripts/gate.sh`, rules explained in `scripts/gate/why.tsv`, printed under each row): no 5xx; issuer
