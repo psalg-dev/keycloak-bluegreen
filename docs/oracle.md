@@ -1,13 +1,14 @@
-# Oracle 19c instead of Postgres: route, tools, zero-downtime analysis
+# Oracle Database Free instead of Postgres: route, tools, zero-downtime analysis
 
 Branch `oracle-19c`. This replaces the demo's database engine; the Keycloak blue/green
 contract, load, gate and report stay. The short version:
 
-- **The runnable demo uses Oracle Database 23ai Free by default**, because Oracle 19c has
-  no free Express Edition (18c and 21c XE exist; 19c does not) and the 19.3 EE image is on
-  Oracle Container Registry behind an Oracle SSO login. The SQL, JDBC driver, schema
-  handling and Data Pump cutover are 19.3-compatible; set `ORACLE_IMAGE` to the 19.3 image
-  for the production target. This is the one factor adjusted to keep the demo runnable.
+- **The demo and the full validation use `gvenzl/oracle-free:23.26.3-slim`** (Oracle AI
+  Database 26ai Free 23.26.3, the 23.x line). That is the supported image here. It is not
+  Oracle 19.3: 19c has no free Express Edition (18c and 21c XE exist; 19c does not), and the
+  19.3 EE image is behind an Oracle registry login. The SQL, JDBC driver, schema handling and
+  Data Pump cutover are 19.3-compatible, but 19.3 EE is optional and not part of this
+  validation.
 - **Zero downtime is preserved the same way it is on Postgres**: a shared schema for patch
   upgrades, and a lossy overlap for minor/major. Oracle changes the *copy tool*, not the
   app-level contract.
@@ -139,7 +140,11 @@ The first `up.sh` creates the Oracle database; it takes a few minutes (19c EE ca
 `reset.sh` only drops/recreates schemas, so later cases are fast. Oracle is a 4 GiB instance;
 give Docker 15 GiB (13 GiB for `PROFILE=laptop`).
 
-### 19.3 EE (the production target)
+### Optional: 19.3 EE (not used in this validation)
+
+The default is the gvenzl Free image above. If you specifically need the 19.3 EE image, it needs an
+Oracle SSO login and a Kubernetes pull secret; this path is documented for completeness, but it was
+not started or measured on this branch.
 
 ```bash
 docker login container-registry.oracle.com   # Oracle SSO account
@@ -208,14 +213,14 @@ Component checks behind it:
   retry, and the readiness probe needs a 5 s timeout (the 1 s default removed all endpoints during a
   337-session purge).
 
-Not validated: 19.3 EE image startup (the Oracle registry returned `unauthorized`; no Oracle SSO
-credentials were available on this machine), Data Guard/RAC, RMAN/PITR, and a 19.3-specific
-refreshable-PDB path. The `helm template` render was checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
+Out of scope for this branch: the 19.3 EE image (optional; it needs Oracle registry credentials and was
+not started), Data Guard/RAC, RMAN/PITR, and a refreshable-PDB path. The `helm template` render was
+checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
 
 ## Limits
 
 - **One Oracle instance in KinD.** No Data Guard, RAC cluster or zone-redundant DB. A DB
-  instance failure is a demo outage; the upgrade cases do not exercise it. Production 19c
+  instance failure is a demo outage; the upgrade cases do not exercise it. Production Oracle
   should use Data Guard/RAC and backups; the app-level blue/green mechanism is independent
   of that.
 - **Data Pump is a logical copy.** It needs undo retention for the SCN export and time

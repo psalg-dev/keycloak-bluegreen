@@ -14,7 +14,7 @@ KC_IMAGE=kc-bluegreen/keycloak
 # docs/oracle.md; the zero-downtime mechanism does not depend on it.
 DB_HOST=${DB_HOST:-oracle}
 DB_SERVICE=${DB_SERVICE:-FREEPDB1}
-ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim} # 19.3 EE: container-registry.oracle.com/database/enterprise:19.3.0.0
+ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim} # optional 19.3 EE: container-registry.oracle.com/database/enterprise:19.3.0.0
 ORACLE_PULL_SECRET=${ORACLE_PULL_SECRET:-}
 ORACLE_PULL_SECRET_FILE=${ORACLE_PULL_SECRET_FILE:-} # docker config.json; up.sh turns it into the k8s secret
 ORACLE_ADMIN_SECRET=${ORACLE_ADMIN_SECRET:-oracle-admin}

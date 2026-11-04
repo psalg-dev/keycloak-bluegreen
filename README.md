@@ -4,11 +4,11 @@ A self-contained demo of zero-downtime Keycloak upgrades on Kubernetes (KinD): t
 ingress-nginx, Oracle Database instead of Postgres, realm configuration through keycloak-config-cli, driven by Jenkins,
 measured by k6 and two OIDC test apps while the cutover happens, and judged by a gate plus an HTML report.
 
-> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The runnable default is
-> 23ai Free because 19c has no free XE image; the code path is 19.3-compatible and `ORACLE_IMAGE` switches to the
-> 19.3 EE image. The route, tools and limits are in [docs/oracle.md](docs/oracle.md). The Results table is the
-> **Oracle 23ai Free run of 2026-11-04**, all five cases gate-pass; 19.3 EE itself was not started because the Oracle
-> container registry needs a login that was not available here.
+> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The demo and the full
+> validation use `gvenzl/oracle-free:23.26.3-slim` (Oracle Database Free, 23.x). That is the supported image here;
+> 19.3 EE is an optional production variant and is not part of this validation. The route, tools and limits are in
+> [docs/oracle.md](docs/oracle.md). The Results table is the **Oracle Free run of 2026-11-04**, all five cases
+> gate-pass.
 
 Nothing is mocked on the path that matters: real brokered logins against a legacy Spring Authorization Server (users
 live there; Keycloak holds no passwords), real token refreshes, logouts, back-/front-channel logout, introspection and
@@ -145,8 +145,8 @@ numbers are comparable within a run, not across profiles.
 
 **Oracle run, 2026-11-04:** Jenkins builds **#2** (`patch`), **#4** (`minor`), **#6** (`major`), **#7**
 (`patch-rollback`), **#9** (`minor-rollback`) on the `oracle-19c` branch, default profile, one KinD cluster, five cases
-back to back. Every gate PASSes. The database is Oracle 23ai Free (`gvenzl/oracle-free:23.26.3-slim`), not 19.3:
-the 19.3 EE image is behind an Oracle registry login that was not available here ([docs/oracle.md](docs/oracle.md)).
+back to back. Every gate PASSes. The database is **Oracle Database Free
+(`gvenzl/oracle-free:23.26.3-slim`)**; 19.3 EE is optional and was not used ([docs/oracle.md](docs/oracle.md)).
 Fixes landed between cases; the last case ran at commit `65a6c80`. The full report is `out/oracle-run/report.html`
 (gitignored; Jenkins archives the same file).
 
