@@ -64,7 +64,7 @@ spec:
               command: ["bash", "-lc", "echo 'select 1 from dual;' | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
             periodSeconds: 10
             timeoutSeconds: 10
-            failureThreshold: 90 # first 19c startup creates the database: up to 15 min
+            failureThreshold: 180 # first 19c startup creates the database: up to 30 min in KinD
           readinessProbe:
             exec:
               command: ["bash", "-lc", "echo 'select 1 from dual;' | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]

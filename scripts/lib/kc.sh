@@ -151,10 +151,10 @@ oracle_pod() {
 }
 
 oracle_ready() {
-  kubectl -n "$NS" rollout status statefulset/oracle --timeout=900s >/dev/null
+  kubectl -n "$NS" rollout status statefulset/oracle --timeout=1800s >/dev/null
   local pod; pod=$(oracle_pod)
   [[ -n $pod ]] || die "oracle: no pod after rollout"
-  kubectl -n "$NS" wait --for=condition=Ready "pod/$pod" --timeout=900s >/dev/null
+  kubectl -n "$NS" wait --for=condition=Ready "pod/$pod" --timeout=1800s >/dev/null
 }
 
 # sql_admin <sql>: run SQL in the Keycloak PDB as SYSDBA through stdin (no quoting inside the pod, no password in
