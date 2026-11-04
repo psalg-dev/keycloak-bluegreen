@@ -1,6 +1,6 @@
 # AGENTS.md - setting this demo up
 
-This repo runs a blue/green Keycloak upgrade demo on one machine: KinD, Postgres, Jenkins, k6. Bring it up, run one
+This repo runs a blue/green Keycloak upgrade demo on one machine: KinD, Oracle Database, Jenkins, k6. Bring it up, run one
 case, judge it. Do the steps in order; each ends with a check that tells you it is done. The design, the mechanisms
 and the known limits are in README.md, PLAN.md and docs/failure-modes.md; this file only covers getting it running.
 
@@ -24,8 +24,10 @@ docker compose run --rm launcher
 docker compose up -d jenkins
 ```
 
-`up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, CloudNativePG, pg-1,
-the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use `PROFILE=laptop` on every command.
+`up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, one Oracle instance
+(2 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
+`PROFILE=laptop` on every command; Oracle needs a 13 GiB Docker VM there, not the old 10 GiB. 19.3 EE instead of the
+default 23ai Free: see `docs/oracle.md` (`ORACLE_IMAGE`, `ORACLE_PULL_SECRET_FILE`).
 
 Done when `docker compose run --rm launcher bash scripts/check-cluster.sh blue` passes and http://localhost:8081
 answers (user `admin`, password in `out/jenkins-admin-password`).
@@ -70,5 +72,6 @@ Done when every script prints `ok`/`passed` and shellcheck is silent. `test-gate
   `~/.kube`: reach the cluster with `docker exec kc-bluegreen-jenkins-1 kubectl ...` or a launcher command.
 - Never run `kc.sh` subcommands (or `update-compatibility`) inside a live Keycloak pod: it re-augments the pod's build.
 - `out/` is gitignored (secrets, certs, runs). Commit with explicit paths.
-- Where things are defined: README.md (run and results), PLAN.md (design and known limits), docs/failure-modes.md
-  (every mode, window and bound), load/RATE.md (load baseline), docs/production-readiness.md (what production needs).
+- Where things are defined: README.md (run and results), docs/oracle.md (Oracle route and limits), PLAN.md (historical
+  design and known limits), docs/failure-modes.md (every mode, window and bound), load/RATE.md (load baseline),
+  docs/production-readiness.md (what production needs).

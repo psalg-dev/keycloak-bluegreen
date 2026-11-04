@@ -51,3 +51,4 @@ latency_app_call_introspect	end-to-end latency of an app's API call validated by
 latency_introspection	Keycloak's introspection latency as the resource server sees it: the direct cost of the cutover on every introspecting API
 latency_regression	step classes whose p95 during the cutover is more than twice their pre-switch p95: where users feel the deployment even without errors
 window_exercised	proves the lossy window really happened: a session made on the old version after the copy is unknown to the new one (else the lossy rules passed on no data, or the new DB saw writes it should not)
+db_copy_caught_up	the green copy must be at least as new as the declared copy point; if it is older, the window bound is a guess and sessions/logouts outside it are lost silently

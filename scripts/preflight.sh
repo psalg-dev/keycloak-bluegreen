@@ -22,15 +22,17 @@ else
   bad "no Docker daemon: start Docker Desktop (or dockerd) and re-run"
 fi
 
-# 2. Docker VM memory against the profile's measured peak (default 14.8 GiB with Jenkins, laptop 9.1 GiB).
+# 2. Docker VM memory against the profile's measured peak (default 14.8 GiB with Jenkins, laptop 9.1 GiB on
+# Postgres). Oracle adds a 2 GiB instance and removes the CNPG instances; the Oracle branch needs ~15 GiB default
+# and ~13 GiB laptop.
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
-need=$([[ ${PROFILE} == laptop ]] && echo 9 || echo 15) # GiB
+need=$([[ ${PROFILE} == laptop ]] && echo 13 || echo 15) # GiB
 if ((mem > 0)); then
   gib=$((mem / 1073741824))
   if ((gib >= need)); then
     ok "Docker memory ${gib} GiB (${PROFILE} needs ~${need} GiB)"
   else
-    bad "Docker VM has ${gib} GiB, ${PROFILE} peaks at ~${need} GiB: raise it (Docker Desktop -> Settings -> Resources, or .wslconfig memory=10GB for the laptop profile) or set PROFILE=laptop"
+    bad "Docker VM has ${gib} GiB, ${PROFILE} peaks at ~${need} GiB: raise it (Docker Desktop -> Settings -> Resources, or .wslconfig memory=14GB for the laptop profile) or set PROFILE=laptop"
   fi
 fi
 

@@ -10,6 +10,14 @@ services:
     # `PROFILE=laptop docker compose run --rm launcher scripts/demo.sh all` (Jenkins: build parameter PROFILE=laptop).
     environment:
       PROFILE: ${PROFILE:-default}
+      # Oracle image selection (19.3 EE needs the Oracle registry and a pull secret). Compose passes only what is
+      # listed here, so an exported ORACLE_IMAGE would otherwise never reach the launcher.
+      ORACLE_IMAGE: ${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim}
+      ORACLE_PULL_SECRET: ${ORACLE_PULL_SECRET:-}
+      ORACLE_PULL_SECRET_FILE: ${ORACLE_PULL_SECRET_FILE:-}
+      ORACLE_SID: ${ORACLE_SID:-}
+      ORACLE_MEMORY: ${ORACLE_MEMORY:-2Gi}
+      ORACLE_STORAGE: ${ORACLE_STORAGE:-20Gi}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/repo

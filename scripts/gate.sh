@@ -156,6 +156,11 @@ rule refresh_green_after_rollback r_refresh_green_after_rollback
 # shellcheck disable=SC2016
 [[ $base != lossy ]] || {
 rule refresh_pre_copy r_refresh_pre_copy
+rule db_copy_caught_up '([$e[] | select(.event == "copy_point")][0]) as $cp
+  | ([$e[] | select(.event == "promoted")][0]) as $pr
+  | if $cp == null or $pr == null then skip("needs copy_point + promoted")
+    elif ($cp.scn // "") == "" or ($pr.scn // "") == "" then verdict(false; "copy_point or promoted has no SCN")
+    else verdict((try (($pr.scn | tonumber) >= ($cp.scn | tonumber)) catch false); "copy_point SCN \($cp.scn), green ready at SCN \($pr.scn)") end'
 if [[ $mode == lossy ]]; then
 rule invalid_grant_in_window r_invalid_grant_in_window
 rule logout_after_replay r_logout_after_replay

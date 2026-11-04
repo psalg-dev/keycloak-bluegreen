@@ -7,24 +7,48 @@ CHART=oci://registry-1.docker.io/bitnamicharts/keycloak
 CHART_VERSION=25.2.0
 KC_IMAGE=kc-bluegreen/keycloak
 
+# Oracle replaces CloudNativePG in this branch. The two blue/green "databases" are two schemas
+# (KC1, KC2) in one PDB; Keycloak's db-schema selects which one a color uses. One Oracle
+# instance keeps the demo on a 16 GB laptop possible and makes reset a schema drop, not a
+# database rebuild. 19c production shape (Data Guard / RAC / separate CDBs) is documented in
+# docs/oracle.md; the zero-downtime mechanism does not depend on it.
+DB_HOST=${DB_HOST:-oracle}
+DB_SERVICE=${DB_SERVICE:-FREEPDB1}
+ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim} # 19.3 EE: container-registry.oracle.com/database/enterprise:19.3.0.0
+ORACLE_PULL_SECRET=${ORACLE_PULL_SECRET:-}
+ORACLE_PULL_SECRET_FILE=${ORACLE_PULL_SECRET_FILE:-} # docker config.json; up.sh turns it into the k8s secret
+ORACLE_ADMIN_SECRET=${ORACLE_ADMIN_SECRET:-oracle-admin}
+ORACLE_DUMP_DIR=${ORACLE_DUMP_DIR:-/opt/oracle/oradata/dpdump}
+# 2 GiB is Oracle Free's documented minimum. 19c EE uses INIT_SGA_SIZE/INIT_PGA_SIZE; the
+# gvenzl Free image computes its own SGA from the container limit and ignores those two.
+ORACLE_MEMORY=${ORACLE_MEMORY:-2Gi}
+ORACLE_STORAGE=${ORACLE_STORAGE:-20Gi}
+ORACLE_SGA_MB=${ORACLE_SGA_MB:-1024}
+ORACLE_PGA_MB=${ORACLE_PGA_MB:-512}
+if [[ $ORACLE_IMAGE == *oracle-free* ]]; then
+  ORACLE_SID=${ORACLE_SID:-FREE}
+else
+  ORACLE_SID=${ORACLE_SID:-ORCLCDB}
+fi
+
 # TAG (each script sets one; helpers here inherit the caller's) says what kind of work a line belongs to:
 # [deployment], [load test], [config], [database], [replay], [verification], ...
 log() { printf '%s %s%s\n' "$(date -u +%FT%TZ)" "${TAG:+[$TAG] }" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
 
-# PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color, 3 Postgres instances).
+# PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color).
 # laptop = fits a 16 GB laptop (Docker VM 8-10 GB): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
 # (2 pods/color, PDB 1, smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount
-# (check-cluster.sh compares them). PG_INSTANCES 2, not 1: same pg templates and the same promote/restart path as
-# default (only the count differs), sync replication (ANY 1) kept; 1 instance needs the synchronous block removed
-# (no standby to ack) for ~340 MiB less per cluster. Cost of 2: a standby restart stalls commits (dataDurability).
+# (check-cluster.sh compares them). Oracle is one instance in both profiles: 2 GiB is its documented minimum, so
+# PROFILE=laptop needs a 16 GB Docker VM here rather than the 10 GB Postgres profile. The old PG_INSTANCES knob is
+# gone: schemas KC1/KC2 are cheap, the Oracle instance is the unit.
 # laptop k6: fewer logins/s (login VUs = rate x 25) and app VUs; refresh/logout VUs stay (cheap, the gate needs them).
 # NGINX_WORKERS: ingress-nginx defaults to one worker per CPU the node sees (= every host CPU); 2 carry this load.
 PROFILE=${PROFILE:-default}
 # shellcheck disable=SC2034 # read by the scripts that source this file
 case $PROFILE in
-  default) KC_REPLICAS=3 PG_INSTANCES=3 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
-  laptop) KC_REPLICAS=2 PG_INSTANCES=2 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
+  default) KC_REPLICAS=3 ORACLE_CPUS=1 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
+  laptop) KC_REPLICAS=2 ORACLE_CPUS=1 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
   *) die "unknown PROFILE '$PROFILE' (default|laptop)" ;;
 esac
 
@@ -77,10 +101,11 @@ image_tag() { echo "$1-p${2:-1}"; } # <kc_version> [provider_version]
 # build_opts <kc_major>: `kc.sh build` options. 26 = the Dockerfile default. On 25 cache/cache-stack are runtime
 # options (build rejects them, exit 2; the chart env sets them) and there is no stateless/jdbc-ping. User sessions
 # reach the DB only with the preview feature persistent-user-sessions, which must be on from the first start.
+# --db=oracle is baked here; the Oracle JDBC driver (ojdbc17 + orai18n) is added in images/keycloak/Dockerfile.
 build_opts() {
   case $1 in
-    25) echo "--db=postgres --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions" ;;
-    26) echo "--db=postgres --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=stateless" ;;
+    25) echo "--db=oracle --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions" ;;
+    26) echo "--db=oracle --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=stateless" ;;
     *) die "no build options for Keycloak major $1" ;;
   esac
 }
@@ -107,20 +132,97 @@ build_image() {
   log "image $KC_IMAGE:$tag loaded"
 }
 
-# ensure_secret <name> <key>: random value, created once, never printed
+# ensure_secret <name> <key> [bytes]: random value, created once, never printed. Oracle 19c limits passwords to 30
+# characters, so the Oracle admin secret uses 12 bytes (24 hex); Keycloak secrets keep the default 24 bytes.
 ensure_secret() {
   kubectl -n "$NS" get secret "$1" >/dev/null 2>&1 && return
-  kubectl -n "$NS" create secret generic "$1" --from-literal="$2=$(openssl rand -hex 24)" >/dev/null
+  kubectl -n "$NS" create secret generic "$1" --from-literal="$2=$(openssl rand -hex "${3:-24}")" >/dev/null
 }
 
-# create_db <name>: CNPG cluster, waits until Ready
+# db_schema <name>: the demo's logical DB names are kc1/kc2; Oracle schemas are upper-case.
+db_schema() {
+  [[ $1 =~ ^kc[0-9]+$ ]] || die "invalid db name '$1' (expected kc<number>)"
+  printf '%s' "${1^^}"
+}
+
+# oracle_pod: the one Oracle StatefulSet pod (k8s/oracle/oracle.yaml.tpl)
+oracle_pod() {
+  kubectl -n "$NS" get pod -l app=oracle -o jsonpath='{.items[0].metadata.name}'
+}
+
+oracle_ready() {
+  kubectl -n "$NS" rollout status statefulset/oracle --timeout=900s >/dev/null
+  local pod; pod=$(oracle_pod)
+  [[ -n $pod ]] || die "oracle: no pod after rollout"
+  kubectl -n "$NS" wait --for=condition=Ready "pod/$pod" --timeout=900s >/dev/null
+}
+
+# sql_admin <sql>: run SQL in the Keycloak PDB as SYSDBA through stdin (no quoting inside the pod, no password in
+# argv). Used for schema lifecycle and instrumentation only; Keycloak connects as its own schema user.
+sql_admin() {
+  local pod; pod=$(oracle_pod)
+  [[ -n $pod ]] || die "oracle pod not running"
+  printf '%s\n' \
+    "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
+    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON" \
+    "ALTER SESSION SET CONTAINER = $DB_SERVICE;" \
+    "$1" \
+    "exit;" \
+    | kubectl -n "$NS" exec -i "$pod" -- sqlplus -s / as sysdba
+}
+
+# sql_db <db> <sql>: SQL in that schema. The SYSDBA session can read any schema, so the password never leaves its Secret.
+sql_db() {
+  local schema; schema=$(db_schema "$1")
+  sql_admin "ALTER SESSION SET CURRENT_SCHEMA = $schema;
+$2"
+}
+
+# sql_scalar <db> <sql>: the one numeric/hex value a scalar SELECT returns (SCN, count), ignoring SQL*Plus noise.
+sql_scalar() {
+  sql_db "$1" "$2" | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9A-Fa-f]+$/ { v = $1 } END { print v }'
+}
+
+# drop_db <name>: remove one schema and its Secret, if present. Used before a lossy switch so a retry after a failed
+# Data Pump import starts from an empty target (create_db alone would reuse the half-written schema).
+drop_db() {
+  local TAG=database schema count
+  schema=$(db_schema "$1")
+  [[ -n $(oracle_pod) ]] || return 0
+  count=$(sql_admin "SELECT COUNT(*) FROM DBA_USERS WHERE USERNAME = '$schema';" | tr -d '\r' \
+    | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
+  if [[ ${count:-0} != 0 ]]; then
+    log "dropping Oracle schema $schema"
+    sql_admin "DROP USER $schema CASCADE;" >/dev/null
+  fi
+  kubectl -n "$NS" delete secret "$1-app" --ignore-not-found >/dev/null
+}
+
+# create_db <name>: an Oracle schema/user, waits until it can be used. The Oracle instance itself is created once by
+# up.sh; reset drops and recreates schemas, which is why a demo case no longer rebuilds a database.
 create_db() {
-  local TAG=database
+  local TAG=database name=$1 schema count pass
+  schema=$(db_schema "$name")
   check_profile
-  log "creating db $1 ($PG_INSTANCES instances, sync replication) and waiting for Ready"
-  DB=$1 NS=$NS PG_INSTANCES=$PG_INSTANCES envsubst < k8s/postgres/pg.yaml.tpl | kubectl apply -f - >/dev/null
-  kubectl -n "$NS" wait "cluster.postgresql.cnpg.io/$1" --for=condition=Ready --timeout=600s >/dev/null
-  log "db $1 ready"
+  [[ -n $(oracle_pod) ]] || die "oracle pod not running (run scripts/up.sh first)"
+  if kubectl -n "$NS" get secret "$name-app" >/dev/null 2>&1; then
+    log "db $name ($schema) already exists"
+    return
+  fi
+  pass="Kc$(openssl rand -hex 12)" # 26 chars: Oracle 19c's password limit is 30
+  count=$(sql_admin "SELECT COUNT(*) FROM DBA_USERS WHERE USERNAME = '$schema';" | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
+  if [[ ${count:-0} == 0 ]]; then
+    log "creating Oracle schema $schema (user + quota; no CNPG cluster)"
+    sql_admin "CREATE USER $schema IDENTIFIED BY \"$pass\" DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS;" >/dev/null
+  else
+    log "Oracle schema $schema exists without its Secret: resetting its password"
+    sql_admin "ALTER USER $schema IDENTIFIED BY \"$pass\" ACCOUNT UNLOCK;" >/dev/null
+  fi
+  sql_admin "GRANT CONNECT, RESOURCE, CREATE VIEW, CREATE SYNONYM TO $schema;
+GRANT SELECT ON SYS.DBA_RECYCLEBIN TO $schema;
+ALTER USER $schema QUOTA UNLIMITED ON USERS;" >/dev/null
+  kubectl -n "$NS" create secret generic "$name-app" --from-literal=username="$schema" --from-literal=password="$pass" >/dev/null
+  log "db $name ready (Oracle schema $schema in $DB_SERVICE)"
 }
 
 # deploy_color <color> <kc_version> <db> [provider_version]
@@ -128,15 +230,20 @@ deploy_color() {
   local color=$1 version=$2 db=$3 tag; tag=$(image_tag "$2" "${4:-1}")
   local overlay=(); [[ $version == 25.* ]] && overlay=(-f helm/values-kc25.yaml)
   [[ $PROFILE == default ]] || overlay+=(-f "helm/values-$PROFILE.yaml") # last: wins over common + kc25
+  local schema; schema=$(db_schema "$db")
   check_profile
-  log "deploying kc-$color @ $version ($tag) on $db, waiting for $KC_REPLICAS Ready pods (helm --wait)"
+  log "deploying kc-$color @ $version ($tag) on Oracle schema $schema, waiting for $KC_REPLICAS Ready pods (helm --wait)"
   helm upgrade --install "kc-$color" "$CHART" --version "$CHART_VERSION" -n "$NS" \
     -f helm/values-common.yaml "${overlay[@]}" \
     --set "image.tag=$tag" \
-    --set "externalDatabase.host=$db-rw" \
+    --set "externalDatabase.host=$DB_HOST" \
+    --set "externalDatabase.port=1521" \
+    --set "externalDatabase.database=$DB_SERVICE" \
+    --set "externalDatabase.schema=$schema" \
     --set "externalDatabase.existingSecret=$db-app" \
     --wait --timeout 15m >/dev/null
-  log "kc-$color @ $version on $db ready"
+  scripts/check-db.sh "$db" # Keycloak Ready is not proof it used the schema we intended
+  log "kc-$color @ $version on Oracle schema $schema ready"
 }
 
 # set_active <color> <db> <kc_version>: flip the switch, record state (the previous one too, for rollback.sh)
@@ -266,10 +373,18 @@ unfreeze() {
   log "unfrozen (kc-gate -> kc-$(state activeColor))"
 }
 
-# psql_db <db-cluster> <sql> [database]: run SQL on the cluster's current primary as postgres
-psql_db() {
-  local pod; pod=$(kubectl -n "$NS" get cluster.postgresql.cnpg.io "$1" -o jsonpath='{.status.currentPrimary}')
-  kubectl -n "$NS" exec "$pod" -c postgres -- psql -U postgres -d "${3:-postgres}" -Atc "$2"
+# delete_dbs: drop every demo schema (KC1, KC2, ...) and its Secret. The Oracle instance and its PVC stay: startup
+# costs minutes, a schema drop costs seconds. Data Pump dumps are removed too, unless one is being kept for evidence.
+delete_dbs() {
+  local TAG=database s
+  [[ -n $(oracle_pod) ]] || { log "no Oracle pod: nothing to delete"; return; }
+  for s in $(sql_admin "SELECT USERNAME FROM DBA_USERS WHERE REGEXP_LIKE(USERNAME, '^KC[0-9]+$') ORDER BY USERNAME;" \
+    | tr -d '\r' | awk '/^KC[0-9]+$/ { print }'); do
+    log "dropping Oracle schema $s"
+    sql_admin "DROP USER $s CASCADE;" >/dev/null
+    kubectl -n "$NS" delete secret "${s,,}-app" --ignore-not-found >/dev/null
+  done
+  kubectl -n "$NS" exec "$(oracle_pod)" -- bash -c "rm -f '$ORACLE_DUMP_DIR'/*.dmp '$ORACLE_DUMP_DIR'/*.log" 2>/dev/null || true
 }
 
 # admin_direct_start <color> / admin_direct_stop: like admin_api, but straight to one color's Service via a
@@ -284,24 +399,6 @@ admin_direct_start() {
   die "port-forward to kc-$1 failed"
 }
 admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE ADMIN_PF; ADMIN_TOKEN=; }
-
-# delete_dbs: delete every CNPG cluster AND wait until their children (pods, PVCs, secrets) are gone. Recreating a
-# cluster under the same name while the old pods still terminate makes CNPG count them, mark the new cluster
-# initialized, then find no PVCs -> "unrecoverable" (2026-11-02; `delete --wait` returns before GC is done).
-delete_dbs() {
-  local TAG=database
-  # Teardown only: skip Postgres' smart shutdown (CNPG default: wait up to 180 s for sessions to end before a fast
-  # shutdown). It protects in-flight transactions in real operations; here the data is being thrown away.
-  local c; for c in $(kubectl -n "$NS" get cluster.postgresql.cnpg.io -o name); do
-    kubectl -n "$NS" patch "$c" --type merge -p '{"spec":{"smartShutdownTimeout":1}}' >/dev/null
-  done
-  kubectl -n "$NS" delete cluster.postgresql.cnpg.io --all --cascade=foreground --wait --timeout=600s >/dev/null
-  local _; for _ in $(seq 150); do
-    [[ -z $(kubectl -n "$NS" get pod,pvc,secret -l cnpg.io/cluster -o name) ]] && return
-    sleep 2
-  done
-  die "old CNPG pods/PVCs/secrets still present"
-}
 
 # k6_status: one line of what the load generator has seen so far (requests, 5xx/status 0, refresh invalid_grant,
 # logins, logged-out sessions that still refresh), or "k6 not running"

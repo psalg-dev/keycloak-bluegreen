@@ -51,11 +51,11 @@ def ev($n): [$e[] | select(.event == $n) | .t | ts] | .[0];
   def newusers($a; $b): [$L[] | select(.step == "login_token" and .status == 200 and ((.user // "user0")[4:] | tonumber) > 4000)]
     | group_by(.user) | map(map(.te) | min | select(. >= $a and . < $b)) | length; # first login of users 4001-5000
   {k6: ., events: (
-    [{t: at($S - 95), event: "replica_ready", db: "pg-2", source: "pg-1"},
+    [{t: at($S - 95), event: "copy_ready", db: "kc2", source: "kc1", scn: "1234567"},
      {t: at($S - 40), event: "window_start"},
-     {t: at($cp), event: "copy_point", lsn: "0/5A0001C8"},
-     {t: at($S - 33), event: "promoted", db: "pg-2"},
-     {t: at($S - 12), event: "migration", db: "pg-2", from: $from, to: $to, changesets_before: $cb, changesets_after: $ca},
+     {t: at($cp), event: "copy_point", scn: "1234567"},
+     {t: at($S - 33), event: "promoted", db: "kc2", scn: "1234567"},
+     {t: at($S - 12), event: "migration", db: "kc2", from: $from, to: $to, changesets_before: $cb, changesets_after: $ca},
      {t: at($S - 1), event: "replay", from: "blue", to: "green", since: (($cp - 5 + $sh) | floor | todate), logouts: (cnt($cp - 5; $S - 1) | tostring), users: (newusers($cp - 5; $S - 1) | tostring), revokes: "0"},
      {t: at($S), event: "switch", from: "blue", to: "green"},
      {t: at($S + 15.2), event: "replay", from: "blue", to: "green", since: (($cp - 5 + $sh) | floor | todate), logouts: (cnt($cp - 5; $S + 15) | tostring), users: (newusers($cp - 5; $S + 15) | tostring), revokes: "0"},

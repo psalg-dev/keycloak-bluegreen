@@ -111,7 +111,7 @@ const ERR = [['login_failed', '--s1'], ['refresh_lost_session', '--s2'], ['logou
   ['refresh_other_error', '--s4'], ['other_4xx', '--s5'], ['app', '--s6'], ['net_error', '--s7'], ['http_5xx', '--s8']];
 const APP_ERR = ['introspection_error', 'introspection_false_inactive', 'jwt_rejected'];
 const MAJOR = new Set(['switch', 'rollback', 'copy_point']);
-const MARK = /^(switch|kill|copy_point|promoted|migration|replay|replay_done|rollback.*|drained|load_stop|recovered)$/;
+const MARK = /^(switch|kill|copy_point|copy_ready|promoted|migration|replay|replay_done|rollback.*|drained|load_stop|recovered)$/;
 const VERDICT = { ok: 'OK', expected: 'expected', fail: 'over bound', warn: 'over bound (not gated)', nodata: 'not measured (no data)' };
 
 const h = (tag, attrs, ...kids) => {

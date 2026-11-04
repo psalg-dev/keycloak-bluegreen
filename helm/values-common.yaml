@@ -35,13 +35,20 @@ cache:
 postgresql:
   enabled: false
 externalDatabase:
-  port: 5432
-  database: keycloak
-  schema: public
+  port: 1521
+  database: FREEPDB1
+  schema: KC1
   existingSecretUserKey: username
   existingSecretPasswordKey: password
 
 extraEnvVars:
+  # Oracle replaces Postgres. The chart still renders a jdbc:postgresql URL from externalDatabase; this explicit
+  # env var wins over the ConfigMap envFrom. KC_DB_SCHEMA is set per release from externalDatabase.schema.
+  # The image is built with --db=oracle (scripts/lib/kc.sh build_opts, images/keycloak/Dockerfile).
+  - name: KC_DB
+    value: oracle
+  - name: KC_DB_URL
+    value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
   # Served under several hostnames (kc-net1/kc-net2), like prod: the issuer follows the request host.
   # Only safe because ingress-nginx routes just the known hosts and overwrites X-Forwarded-Host (smoke.sh proves it).
   - name: KC_HOSTNAME_STRICT

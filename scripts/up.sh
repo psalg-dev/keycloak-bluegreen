@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent platform bring-up: KinD + ingress-nginx + CNPG + pg-1 + blue Keycloak. Run via `docker compose up launcher`.
+# Idempotent platform bring-up: KinD + ingress-nginx + Oracle + kc1 + blue Keycloak. Run via `docker compose up launcher`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -7,7 +7,6 @@ TAG="platform"
 
 FROM=${FROM:-26.8.1}
 INGRESS_NGINX=controller-v1.15.1 # final release; ingress-nginx is EOL since March 2026 (user's prod edge)
-CNPG=1.30.1
 
 # Fail with one sentence when this machine cannot run the demo (ports, Docker memory, shells, DNS), not halfway
 # through a cluster build.
@@ -49,14 +48,29 @@ if ! grep -q localtest <<<"$corefile"; then
   log "coredns rewrite for *.localtest.me"
 fi
 
-kubectl apply --server-side -f "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v$CNPG/cnpg-$CNPG.yaml" >/dev/null
-kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=300s >/dev/null
-log "cnpg ready"
-
 for ns in "$NS" legacy apps; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done
 scripts/certs.sh "$NS" legacy apps
 ensure_secret kc-bootstrap-admin password
-kubectl -n "$NS" get cluster.postgresql.cnpg.io pg-1 >/dev/null 2>&1 || create_db pg-1
+ensure_secret "$ORACLE_ADMIN_SECRET" password 12
+kubectl -n "$NS" create configmap oracle-bootstrap --from-file=k8s/oracle/bootstrap.sh --dry-run=client -o yaml \
+  | kubectl apply -f - >/dev/null
+if [[ -n $ORACLE_PULL_SECRET && -n $ORACLE_PULL_SECRET_FILE ]]; then
+  kubectl -n "$NS" create secret generic "$ORACLE_PULL_SECRET" \
+    --from-file=.dockerconfigjson="$ORACLE_PULL_SECRET_FILE" --type=kubernetes.io/dockerconfigjson \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+fi
+# envsubst takes only environment variables: export the template's inputs for this one command.
+NS=$NS DB_SERVICE=$DB_SERVICE ORACLE_IMAGE=$ORACLE_IMAGE ORACLE_SID=$ORACLE_SID \
+  ORACLE_ADMIN_SECRET=$ORACLE_ADMIN_SECRET ORACLE_CPUS=$ORACLE_CPUS ORACLE_MEMORY=$ORACLE_MEMORY \
+  ORACLE_SGA_MB=$ORACLE_SGA_MB ORACLE_PGA_MB=$ORACLE_PGA_MB ORACLE_STORAGE=$ORACLE_STORAGE \
+  envsubst < k8s/oracle/oracle.yaml.tpl | kubectl apply -f - >/dev/null
+if [[ -n $ORACLE_PULL_SECRET ]]; then
+  kubectl -n "$NS" patch statefulset oracle --type merge \
+    -p "{\"spec\":{\"template\":{\"spec\":{\"imagePullSecrets\":[{\"name\":\"$ORACLE_PULL_SECRET\"}]}}}}" >/dev/null
+fi
+oracle_ready
+log "oracle ready ($ORACLE_IMAGE, service $DB_SERVICE)"
+create_db kc1
 
 # Legacy IdP (outside world). Its broker client secret is copied to Keycloak's namespace for the IdP configs.
 if ! kubectl -n legacy get secret legacy-idp >/dev/null 2>&1; then
@@ -103,7 +117,7 @@ log "test apps ready: https://app.localtest.me, https://api.localtest.me"
 
 kubectl apply -f k8s/edge/ >/dev/null
 if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then
-  first_install "$FROM" 1 pg-1
+  first_install "$FROM" 1 kc1
 else
   set_active "$(state activeColor)" "$(state activeDb)" "$(state version)" # k8s/edge/ hard-codes blue; state wins
 fi

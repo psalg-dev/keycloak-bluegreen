@@ -1,6 +1,6 @@
 # PROFILE=laptop (scripts/lib/kc.sh): 1 control-plane + 2 workers instead of 3. Keycloak (2 pods/color, hard
-# anti-affinity per node + zone spread) and CNPG (2 instances, required anti-affinity per zone) need exactly 2 zones;
-# a third worker would only add node overhead. 1 worker would need the anti-affinity relaxed. Label
+# anti-affinity per node + zone spread) needs exactly 2 zones; Oracle is one instance, so it fits either. A third
+# worker would only add node overhead. 1 worker would need the anti-affinity relaxed. Label
 # kc-bluegreen/profile records the profile: check_profile refuses a run with another one.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4

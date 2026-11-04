@@ -61,14 +61,15 @@ the endpoints); runs without `flipped` use the event alone (`acrossflip` in `scr
 SIGINT, not server behaviour; they are counted ("aborted") and judged by no rule. Logins still in their think time at
 the end of the data (no failed hop, no token, last hop < 30 s before the end) are not judged.
 
-**Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, CNPG Postgres in-cluster;
-`PROFILE=laptop`: 2 workers, 2 pods per color, 2 Postgres instances, ~2 logins/s): k6, both
-colors, Postgres and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
+**Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, one Oracle instance in-cluster;
+`PROFILE=laptop`: 2 workers, 2 pods per color, the same one Oracle instance, ~2 logins/s): k6, both
+colors, Oracle and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
 absolute capacity numbers. Synthetic load at a fixed, modest rate (~2 logins/s): rare races need far more traffic to
 show up. One run per case: a count of 0 is "not seen in this run", not a probability; compare rates across runs before
 calling something fixed. No real network between zones, no cloud load balancer: the flip is a Service selector change
-seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results); report tabs built
-from generated data are marked SYNTHETIC.
+seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results) **on Postgres**;
+this branch has not recorded an Oracle run yet. Oracle copy instrumentation: `copy_point.scn` and `promoted.scn` in
+`events.jsonl`, checked by the `db_copy_caught_up` gate rule. Report tabs built from generated data are marked SYNTHETIC.
 
 ## Reading a mode
 

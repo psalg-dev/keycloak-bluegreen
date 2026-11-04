@@ -1,6 +1,6 @@
 {"t":"2026-11-02T22:20:00.000Z","event":"freeze","paths":"/admin /realms/demo/account /realms/master/account"}
-{"t":"2026-11-02T22:20:10.000Z","event":"copy_point","lsn":"0/5A0001F8"}
-{"t":"2026-11-02T22:20:15.000Z","event":"promoted","db":"pg-2"}
+{"t":"2026-11-02T22:20:10.000Z","event":"copy_point","scn":"1234567"}
+{"t":"2026-11-02T22:20:15.000Z","event":"promoted","db":"pg-2","scn":"1234567"}
 {"t":"2026-11-02T22:20:40.000Z","event":"migration","before":"312","after":"318"}
 {"t":"2026-11-02T22:20:55.000Z","event":"replay_pass","pass":"1","logouts":"1","users":"1"}
 {"t":"2026-11-02T22:21:00.000Z","event":"switch","from":"blue","to":"green"}

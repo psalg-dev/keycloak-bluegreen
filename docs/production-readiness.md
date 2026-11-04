@@ -7,6 +7,13 @@ Scope: what it would take to run this repo's approach in an enterprise environme
 Bitnami chart, Jenkins, ingress-nginx, keycloak-config-cli, a custom provider JAR, brokering to a legacy Spring
 auth server, `hostname-strict=false` behind several ingresses.
 
+> **Branch `oracle-19c`:** the demo now uses Oracle instead of CNPG/Postgres. The DB-specific
+> sections below (notably 4.1, the copy step, backups/PITR and DB metrics) describe the
+> Postgres baseline. The Oracle route, its 19.3/23ai Free split and its production gaps
+> (Data Guard/RAC, RMAN, AWR, refreshable PDB clone) are in
+> [docs/oracle.md](docs/oracle.md). Where this document says "CNPG", read "Oracle instance"
+> for this branch; the app-level readiness findings are unchanged.
+
 Conventions:
 - **Fact**: backed by a repo path:line, a worklog entry or a URL.
   Worklogs are in `C:\dev\_worklogs\keycloak-bluegreen\`. `wl:<name>` means `2026-11-0x-<name>.md`. For example,
@@ -39,7 +46,8 @@ Conventions:
 - KinD on one host (zones are labels on one machine, `kind/cluster.yaml`), `kind load` images, no registry.
 - Jenkins in compose, running as root with `docker.sock` (`compose.yaml:17-37`).
 - A demo CA and random k8s Secrets (`scripts/certs.sh`, `scripts/lib/kc.sh:72-76`).
-- CNPG with 2 Gi volumes and no backups (`k8s/postgres/pg.yaml.tpl`).
+- The Postgres baseline used CNPG with 2 Gi volumes and no backups; the Oracle branch uses one 20 Gi PVC and no
+  backups (`k8s/oracle/oracle.yaml.tpl`).
 - The replay source: `kubectl logs` of pod stdout (`scripts/replay.sh:16-20`).
 
 **Biggest gaps (ranked)**
@@ -385,7 +393,7 @@ or IPs. The guide calls it weak alone (IPs can be spoofed), so it complements th
 
 | | CNPG in-cluster (demo) | Managed (Aurora/RDS/Cloud SQL/Azure Flexible) |
 |---|---|---|
-| Sync replication across AZs | `synchronous: any 1, dataDurability: required` (`k8s/postgres/pg.yaml.tpl:9-12`) | Aurora: storage-level quorum across 3 AZs. RDS Multi-AZ: synchronous standby |
+| Sync replication across AZs | Postgres baseline used `synchronous: any 1, dataDurability: required` (`k8s/postgres/pg.yaml.tpl`, historical); the Oracle demo uses one instance and no Data Guard | Aurora: storage-level quorum across 3 AZs. RDS Multi-AZ: synchronous standby |
 | Replica-and-promote copy for the lossy path | Native (replica cluster + `replica.enabled=false`) | Not the same primitive: see 4.4 |
 | Backups/PITR | **None configured** | Built in |
 | Team skills | Requires Postgres-on-k8s operations (operator upgrades, PVC/storage, failover drills) | DBA/cloud team |
