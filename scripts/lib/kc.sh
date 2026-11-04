@@ -123,11 +123,10 @@ build_image() {
     log "image $KC_IMAGE:$tag is up to date (inputs $inputs): no rebuild"
   else
     log "building image $KC_IMAGE:$tag (inputs $inputs; provider jar + tests + kc.sh build; a new version takes minutes)"
-    # stream only the build-step headers ("#7 [ext 4/7] RUN mvn ... verify"), so a long build is visibly alive
+    # stream the build log with a prefix (the launcher is Alpine/BusyBox: no GNU `sed -u` or `grep --line-buffered`)
     docker build --progress=plain --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" --build-arg "KC_BUILD_OPTS=$opts" \
       --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" --label "kc-bluegreen.inputs=$inputs" \
-      -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . 2>&1 \
-      | { grep --line-buffered -E '^#[0-9]+ (\[|CACHED|DONE [0-9]+\.[0-9]+s$|ERROR)' || true; } | sed -u 's/^/  docker /' >&2
+      -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . 2>&1 | sed 's/^/  docker /' >&2
   fi
   kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag" # skips nodes that have it
   log "image $KC_IMAGE:$tag loaded"
