@@ -12,7 +12,7 @@ TAG="deployment"
 target=${1:?target_version}
 active=$(state activeColor) src=$(state activeDb) from=$(state version)
 idle=$([[ $active == blue ]] && echo green || echo blue)
-new=kc-$(( ${src#kc} + 1 ))
+new=kc$(( ${src#kc} + 1 ))
 check_profile
 
 # 1. Target schema + pre-built target image. Both before the freeze: only the copy point and the export/import
