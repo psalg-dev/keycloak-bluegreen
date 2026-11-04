@@ -48,7 +48,7 @@ kubectl -n "$NS" exec "$oracle_pod_name" -- expdp "system/$admin_pw@//localhost:
 log "importing into $new_schema (REMAP_SCHEMA $src_schema:$new_schema)"
 kubectl -n "$NS" exec "$oracle_pod_name" -- impdp "system/$admin_pw@//localhost:1521/$DB_SERVICE" \
   "SCHEMAS=$src_schema" "REMAP_SCHEMA=$src_schema:$new_schema" "DIRECTORY=KC_DUMP" "DUMPFILE=$dump" \
-  "LOGFILE=$dplog" >/dev/null || die "impdp into $new_schema failed (see $dplog in the Oracle pod)"
+  "LOGFILE=$dplog" EXCLUDE=USER >/dev/null || die "impdp into $new_schema failed (see $dplog in the Oracle pod)"
 event copy_ready db="$new" scn="$copy_scn"
 event promoted db="$new" scn="$copy_scn" # gate: the lossy window really had a copy to lose sessions against
 

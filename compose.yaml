@@ -16,7 +16,7 @@ services:
       ORACLE_PULL_SECRET: ${ORACLE_PULL_SECRET:-}
       ORACLE_PULL_SECRET_FILE: ${ORACLE_PULL_SECRET_FILE:-}
       ORACLE_SID: ${ORACLE_SID:-}
-      ORACLE_MEMORY: ${ORACLE_MEMORY:-2Gi}
+      ORACLE_MEMORY: ${ORACLE_MEMORY:-4Gi}
       ORACLE_STORAGE: ${ORACLE_STORAGE:-20Gi}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

@@ -48,7 +48,7 @@ one each in `minor`/`major` (green gets a Data Pump copy of blue's at an SCN).
 
 ## Run it
 
-Requirements: Docker with about 16 GB for the containers (the Oracle instance is 2 GiB; measured Postgres peak was
+Requirements: Docker with about 16 GB for the containers (the Oracle instance is 4 GiB; measured Postgres peak was
 14.8 GiB, see Results), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
@@ -70,7 +70,7 @@ docker compose up -d jenkins
 
 1. `jenkins-secret.sh` generates the Jenkins admin password into `out/jenkins-admin-password` (gitignored).
 2. The launcher runs `scripts/up.sh`: KinD cluster (1 control plane + 3 workers labelled zones a/b/c), ingress-nginx,
-   the Oracle instance (2 GiB), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
+   the Oracle instance (4 GiB), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
    and a first blue Keycloak on schema `kc1`. Idempotent; the first run builds images and creates the Oracle database
    (a few minutes; 19c EE takes longer).
 3. Jenkins: <http://localhost:8081>, user `admin`, password from step 1. Job **kc-bluegreen**, parameter `CASE`.
@@ -116,14 +116,14 @@ Then run cases with `PROFILE=laptop` (Jenkins build parameter, or
 a run with a different `PROFILE` stops before it changes anything.
 
 Laptop = 2 KinD workers (zones a, b) instead of 3, 2 Keycloak pods per color instead of 3 (PDB 1 of 2, 1 GiB memory
-limit), the same 2 GiB Oracle instance, the same load profile (2 logins/s, 3 app VUs), 2 ingress-nginx workers. Same
+limit), the same 4 GiB Oracle instance, the same load profile (2 logins/s, 3 app VUs), 2 ingress-nginx workers. Same
 images, config stages, switch scripts and gate rules. Give Docker Desktop / WSL2 about 13 GB (`.wslconfig`:
 `memory=13GB`); Oracle is the reason this is no longer a 10 GB profile.
 
 Measured over all five Postgres cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with
 Jenkins (rollback phase of `minor-rollback`: both colors and both Postgres clusters up). No Oracle memory measurement
 has been recorded yet. The default Postgres profile peaked at 13.8 GiB / 14.8 GiB (Results); Oracle replaces the CNPG
-instances with one 2 GiB instance, so expect a similar or slightly higher peak. Not shown on the laptop profile: the
+instances with one 4 GiB instance, so expect a similar or slightly higher peak. Not shown on the laptop profile: the
 3-zone spread, a pod kill that leaves 2 serving pods per color (here 1), the production PDB of 2 out of 3. Latency
 numbers are comparable within a run, not across profiles.
 

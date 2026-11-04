@@ -136,7 +136,7 @@ docker compose up -d jenkins
 ```
 
 The first `up.sh` creates the Oracle database; it takes a few minutes (19c EE can take ~10).
-`reset.sh` only drops/recreates schemas, so later cases are fast. Oracle is a 2 GiB instance;
+`reset.sh` only drops/recreates schemas, so later cases are fast. Oracle is a 4 GiB instance;
 give Docker 15 GiB (13 GiB for `PROFILE=laptop`).
 
 ### 19.3 EE (the production target)
@@ -212,10 +212,12 @@ Bitnami chart), Data Guard/RAC, and a live 25->26 schema migration on a Data Pum
   far below it. 19c EE has no such cap.
 - **Keycloak 25**: Oracle support is via `--db=oracle`, `persistent-user-sessions`; the
   `jdbc-ping` Oracle fix is a 26.x change, so 25 keeps `cache-stack=kubernetes`.
-- **Oracle memory.** The default is a 2 GiB container, tested with 23ai Free. 19.3 EE has a larger
-  footprint; if it fails to start, set `ORACLE_MEMORY=3Gi` and (for 19c) `ORACLE_SGA_MB=1536` /
+- **Oracle memory.** The default is a 4 GiB container. A standalone container starts at 2 GiB, but in
+  Kubernetes the first-start 7-Zip extraction of the 3.0 GiB database archive plus the 1 GiB memory-backed
+  `/dev/shm` was OOMKilled at 2 GiB and 3 GiB; 4 GiB is the tested in-cluster default. 19.3 EE has a
+  larger footprint; if it fails to start, set `ORACLE_MEMORY=5Gi` and (for 19c) `ORACLE_SGA_MB=1536` /
   `ORACLE_PGA_MB=768`. The preflight memory requirement goes up accordingly.
-- **Laptop profile**: still 2 workers/2 pods, but Oracle needs 2 GiB; give Docker 13 GiB, not
+- **Laptop profile**: still 2 workers/2 pods, but Oracle needs 4 GiB; give Docker 13 GiB, not
   the 10 GiB used by the Postgres laptop profile.
 - **No measured Oracle results yet.** The README's Results table is the Postgres baseline
   from `main`; do not quote it as Oracle numbers. Run the five cases on this branch to

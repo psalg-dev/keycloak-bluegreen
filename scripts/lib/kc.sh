@@ -19,9 +19,10 @@ ORACLE_PULL_SECRET=${ORACLE_PULL_SECRET:-}
 ORACLE_PULL_SECRET_FILE=${ORACLE_PULL_SECRET_FILE:-} # docker config.json; up.sh turns it into the k8s secret
 ORACLE_ADMIN_SECRET=${ORACLE_ADMIN_SECRET:-oracle-admin}
 ORACLE_DUMP_DIR=${ORACLE_DUMP_DIR:-/opt/oracle/oradata/dpdump}
-# 2 GiB is Oracle Free's documented minimum. 19c EE uses INIT_SGA_SIZE/INIT_PGA_SIZE; the
-# gvenzl Free image computes its own SGA from the container limit and ignores those two.
-ORACLE_MEMORY=${ORACLE_MEMORY:-2Gi}
+# Oracle Free's documented minimum is 2 GiB, but the Kubernetes pod also mounts a 1 GiB memory-backed /dev/shm
+# and the image's first start decompresses a 3.0 GiB database archive with 32-thread 7-Zip: 2 GiB (and even 3 GiB)
+# is OOMKilled during that extraction in-cluster. 4 GiB is the tested default; a standalone container starts at 2 GiB.
+ORACLE_MEMORY=${ORACLE_MEMORY:-4Gi}
 ORACLE_STORAGE=${ORACLE_STORAGE:-20Gi}
 ORACLE_SGA_MB=${ORACLE_SGA_MB:-1024}
 ORACLE_PGA_MB=${ORACLE_PGA_MB:-512}
@@ -39,7 +40,7 @@ die() { log "FAIL: $*"; exit 1; }
 # PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color).
 # laptop = fits a 16 GB laptop (Docker VM 8-10 GB): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
 # (2 pods/color, PDB 1, smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount
-# (check-cluster.sh compares them). Oracle is one instance in both profiles: 2 GiB is its documented minimum, so
+# (check-cluster.sh compares them). Oracle is one instance in both profiles: 4 GiB is the tested K8s default, so
 # PROFILE=laptop needs a 16 GB Docker VM here rather than the 10 GB Postgres profile. The old PG_INSTANCES knob is
 # gone: schemas KC1/KC2 are cheap, the Oracle instance is the unit.
 # laptop k6: fewer logins/s (login VUs = rate x 25) and app VUs; refresh/logout VUs stay (cheap, the gate needs them).

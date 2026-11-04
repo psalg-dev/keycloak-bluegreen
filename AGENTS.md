@@ -25,7 +25,7 @@ docker compose up -d jenkins
 ```
 
 `up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, one Oracle instance
-(2 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
+(4 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
 `PROFILE=laptop` on every command; Oracle needs a 13 GiB Docker VM there, not the old 10 GiB. 19.3 EE instead of the
 default 23ai Free: see `docs/oracle.md` (`ORACLE_IMAGE`, `ORACLE_PULL_SECRET_FILE`).
 
