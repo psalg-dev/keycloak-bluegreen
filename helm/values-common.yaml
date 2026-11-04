@@ -106,7 +106,8 @@ customLivenessProbe:
 customReadinessProbe:
   httpGet: { path: /keycloak/health/ready, port: 9000 }
   periodSeconds: 5
-  failureThreshold: 2
+  timeoutSeconds: 5 # Oracle can take >1 s under a 337-session purge; a 1 s probe removes every endpoint and causes a 503
+  failureThreshold: 3
 
 # Endpoint removal propagates to ingress-nginx before the JVM stops accepting requests.
 lifecycleHooks:
