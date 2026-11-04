@@ -172,10 +172,11 @@ sql_admin() {
 }
 
 # sql_db <db> <sql>: SQL in that schema. The SYSDBA session can read any schema, so the password never leaves its Secret.
+# SQL*Plus needs a statement terminator before the closing `exit`; callers pass a bare SELECT, so add one here.
 sql_db() {
-  local schema; schema=$(db_schema "$1")
+  local schema sql; schema=$(db_schema "$1"); sql=${2%;}
   sql_admin "ALTER SESSION SET CURRENT_SCHEMA = $schema;
-$2"
+$sql;"
 }
 
 # sql_scalar <db> <sql>: the one numeric/hex value a scalar SELECT returns (SCN, count), ignoring SQL*Plus noise.
