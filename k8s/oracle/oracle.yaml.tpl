@@ -61,19 +61,19 @@ spec:
             limits: { memory: "${ORACLE_MEMORY}" }
           startupProbe:
             exec:
-              command: ["bash", "-lc", "echo 'select 1 from dual;' | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
+              command: ["bash", "-lc", "echo \"select count(*) from V\\$PDBS where name='${DB_SERVICE}' and open_mode='READ WRITE';\" | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 180 # first 19c startup creates the database: up to 30 min in KinD
           readinessProbe:
             exec:
-              command: ["bash", "-lc", "echo 'select 1 from dual;' | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
+              command: ["bash", "-lc", "echo \"select count(*) from V\\$PDBS where name='${DB_SERVICE}' and open_mode='READ WRITE';\" | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
             periodSeconds: 10
             timeoutSeconds: 10
             failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["bash", "-lc", "echo 'select 1 from dual;' | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
+              command: ["bash", "-lc", "echo \"select count(*) from V\\$PDBS where name='${DB_SERVICE}' and open_mode='READ WRITE';\" | sqlplus -s / as sysdba | grep -qE '^[[:space:]]*1[[:space:]]*$'"]
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 5

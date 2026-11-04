@@ -152,9 +152,30 @@ oracle_pod() {
 
 oracle_ready() {
   kubectl -n "$NS" rollout status statefulset/oracle --timeout=1800s >/dev/null
-  local pod; pod=$(oracle_pod)
+  local pod n; pod=$(oracle_pod)
   [[ -n $pod ]] || die "oracle: no pod after rollout"
   kubectl -n "$NS" wait --for=condition=Ready "pod/$pod" --timeout=1800s >/dev/null
+  # A plain `sqlplus / as sysdba` succeeds while DBCA is still building the database (and the listener is already up),
+  # so the pod can be Ready before the PDB exists. Wait for the PDB itself before creating schemas.
+  for _ in $(seq 360); do
+    n=$(sql_root "SELECT COUNT(*) FROM V\$PDBS WHERE NAME = '$DB_SERVICE' AND OPEN_MODE = 'READ WRITE';" \
+      | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
+    [[ ${n:-0} -gt 0 ]] && return 0
+    sleep 5
+  done
+  die "oracle: PDB $DB_SERVICE did not open read-write within 30 min"
+}
+
+# sql_root <sql>: SQL in CDB$ROOT (before the PDB exists). Used only to wait for the PDB to open.
+sql_root() {
+  local pod; pod=$(oracle_pod)
+  [[ -n $pod ]] || die "oracle pod not running"
+  printf '%s\n' \
+    "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
+    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON" \
+    "$1" \
+    "exit;" \
+    | kubectl -n "$NS" exec -i "$pod" -- sqlplus -s / as sysdba
 }
 
 # sql_admin <sql>: run SQL in the Keycloak PDB as SYSDBA through stdin (no quoting inside the pod, no password in

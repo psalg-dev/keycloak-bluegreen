@@ -59,11 +59,12 @@ if [[ -n $ORACLE_PULL_SECRET && -n $ORACLE_PULL_SECRET_FILE ]]; then
     --from-file=.dockerconfigjson="$ORACLE_PULL_SECRET_FILE" --type=kubernetes.io/dockerconfigjson \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 fi
-# envsubst takes only environment variables: export the template's inputs for this one command.
+# envsubst takes only the template's inputs: an unrestricted call would eat Oracle's V$PDBS in the probe SQL.
 NS=$NS DB_SERVICE=$DB_SERVICE ORACLE_IMAGE=$ORACLE_IMAGE ORACLE_SID=$ORACLE_SID \
   ORACLE_ADMIN_SECRET=$ORACLE_ADMIN_SECRET ORACLE_CPUS=$ORACLE_CPUS ORACLE_MEMORY=$ORACLE_MEMORY \
   ORACLE_SGA_MB=$ORACLE_SGA_MB ORACLE_PGA_MB=$ORACLE_PGA_MB ORACLE_STORAGE=$ORACLE_STORAGE \
-  envsubst < k8s/oracle/oracle.yaml.tpl | kubectl apply -f - >/dev/null
+  envsubst '$NS $DB_SERVICE $ORACLE_IMAGE $ORACLE_SID $ORACLE_ADMIN_SECRET $ORACLE_CPUS $ORACLE_MEMORY $ORACLE_SGA_MB $ORACLE_PGA_MB $ORACLE_STORAGE' \
+  < k8s/oracle/oracle.yaml.tpl | kubectl apply -f - >/dev/null
 if [[ -n $ORACLE_PULL_SECRET ]]; then
   kubectl -n "$NS" patch statefulset oracle --type merge \
     -p "{\"spec\":{\"template\":{\"spec\":{\"imagePullSecrets\":[{\"name\":\"$ORACLE_PULL_SECRET\"}]}}}}" >/dev/null
