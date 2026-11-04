@@ -9,6 +9,10 @@ cache:
 # - KC_CACHE_EMBEDDED_CLUSTER_NAME: 26.7+ option, no meaning on 25 (DNS separates the colors).
 # plus the 25 bootstrap admin: 25 reads KEYCLOAK_ADMIN*, not the chart's KC_BOOTSTRAP_ADMIN_* (those are ignored).
 extraEnvVars:
+  - name: KC_DB
+    value: oracle
+  - name: KC_DB_URL
+    value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
   - name: KC_HOSTNAME_STRICT
     value: "false"
   - name: KC_DB_POOL_MAX_SIZE
