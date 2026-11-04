@@ -10,6 +10,9 @@ check_profile # before the teardown: a wrong PROFILE must not delete anything fi
 log "reset: removing load, both colors, freeze, config jobs, all DB schemas (Oracle stays up)"
 kubectl -n load delete job --all --ignore-not-found >/dev/null 2>&1 || true
 for c in blue green; do helm -n "$NS" uninstall "kc-$c" --wait >/dev/null 2>&1 || true; done
+for c in blue green; do
+  kubectl -n "$NS" wait --for=delete pod -l "app.kubernetes.io/instance=kc-$c" --timeout=120s >/dev/null 2>&1 || true
+done
 kubectl -n "$NS" delete ingress kc-freeze --ignore-not-found >/dev/null # clusters from before kc-gate
 kubectl apply -f k8s/edge/kc-gate.yaml >/dev/null && gate_select "$(kc_selector blue)" # unfrozen; install starts blue
 kubectl -n "$NS" delete job -l app=config-cli --ignore-not-found >/dev/null

@@ -184,6 +184,21 @@ sql_scalar() {
   sql_db "$1" "$2" | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9A-Fa-f]+$/ { v = $1 } END { print v }'
 }
 
+# drop_schema <SCHEMA>: kill any sessions still connected to the schema, then DROP USER CASCADE with a short retry.
+# Helm uninstall returns before every Keycloak connection is gone; Oracle refuses to drop a connected user.
+drop_schema() {
+  local schema=$1 s
+  for _ in $(seq 30); do
+    for s in $(sql_admin "SELECT sid || ',' || serial# FROM v\$session WHERE username = '$schema';" | tr -d '\r' \
+      | awk '/^[0-9]+,[0-9]+$/ { print }'); do
+      sql_admin "ALTER SYSTEM KILL SESSION '$s' IMMEDIATE;" >/dev/null 2>&1 || true
+    done
+    if sql_admin "DROP USER $schema CASCADE;" >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  die "could not drop schema $schema (sessions kept reconnecting?)"
+}
+
 # drop_db <name>: remove one schema and its Secret, if present. Used before a lossy switch so a retry after a failed
 # Data Pump import starts from an empty target (create_db alone would reuse the half-written schema).
 drop_db() {
@@ -194,7 +209,7 @@ drop_db() {
     | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
   if [[ ${count:-0} != 0 ]]; then
     log "dropping Oracle schema $schema"
-    sql_admin "DROP USER $schema CASCADE;" >/dev/null
+    drop_schema "$schema"
   fi
   kubectl -n "$NS" delete secret "$1-app" --ignore-not-found >/dev/null
 }
@@ -382,7 +397,7 @@ delete_dbs() {
   for s in $(sql_admin "SELECT USERNAME FROM DBA_USERS WHERE REGEXP_LIKE(USERNAME, '^KC[0-9]+$') ORDER BY USERNAME;" \
     | tr -d '\r' | awk '/^KC[0-9]+$/ { print }'); do
     log "dropping Oracle schema $s"
-    sql_admin "DROP USER $s CASCADE;" >/dev/null
+    drop_schema "$s"
     kubectl -n "$NS" delete secret "${s,,}-app" --ignore-not-found >/dev/null
   done
   kubectl -n "$NS" exec "$(oracle_pod)" -- bash -c "rm -f '$ORACLE_DUMP_DIR'/*.dmp '$ORACLE_DUMP_DIR'/*.log" 2>/dev/null || true
