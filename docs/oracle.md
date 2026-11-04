@@ -172,7 +172,22 @@ different image name; set `ORACLE_SID` explicitly if the image does not contain
 
 ## Validation done on this branch (2026-11-04)
 
-Component-level, not a full five-case run:
+**Full five-case Jenkins/KinD run on Oracle 23ai Free, all gates PASS:**
+
+| Jenkins build | case | gate |
+|---|---|---|
+| #2 | `patch` (26.8.0 -> 26.8.1, shared) | `GATE PASS (shared)` |
+| #4 | `minor` (26.7.5 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
+| #6 | `major` (25.0.6 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
+| #7 | `patch-rollback` | `GATE PASS (shared-rollback)` |
+| #9 | `minor-rollback` | `GATE PASS (lossy-rollback)` |
+
+The run used the Bitnami chart in KinD, `kc.sh start --optimized`, the 4 GiB Oracle StatefulSet, 3 Keycloak pods per
+color, and the same k6/apps/gate/report path as `main`. The report is `out/oracle-run/report.html` (gitignored; Jenkins
+archives it). Headline: 0 5xx in every case; `minor` 4 sessions lost with 4 silent re-logins; `major` 5/5; both Data
+Pump copies caught up to the declared SCN; changesets 211 -> 238 (minor) and 134 -> 238 (major).
+
+Component checks behind it:
 
 - `docker build` of `images/keycloak/Dockerfile` with `KC_VERSION=26.8.1` and the Oracle JDBC jars:
   `Installed features: [... jdbc-oracle ...]`, `kc.sh build --db=oracle` succeeded. The same build with
@@ -181,20 +196,21 @@ Component-level, not a full five-case run:
 - Keycloak 26.8.1 started against `gvenzl/oracle-free:23.26.3-slim` (Oracle AI Database
   26ai Free 23.26.3, the 23.x line) with `KC_DB_SCHEMA=KC1`: Liquibase created 102 tables and 237
   changesets; JGroups `jdbc-ping` formed a cluster on Oracle; `/realms/master` answered 200.
-- The Oracle Free container started under a 2 GiB cgroup limit and completed first-time database
-  creation plus the bootstrap script; 2 GiB is the default `ORACLE_MEMORY`.
-- Data Pump: `expdp SCHEMAS=KC1 FLASHBACK_SCN=<scn>` exported the full Keycloak schema (29 s);
-  `impdp REMAP_SCHEMA=KC1:KC2` imported it (21 s); a second Keycloak 26.8.1 started on `KC2` and
-  completed bootstrap in ~2 s with the copied schema.
-- Three fixes came out of that test and are in the code: the Data Pump directory must be created
-  inside the PDB (a CDB$ROOT directory was not visible to the PDB session), Keycloak needs
-  `GRANT SELECT ON SYS.DBA_RECYCLEBIN` (Liquibase constraint handling), and Oracle 19c's password
-  limit forced the Oracle admin/app passwords down to 24/26 characters.
+- Data Pump: `expdp SCHEMAS=KC1 FLASHBACK_SCN=<scn>` exported the full Keycloak schema; `impdp
+  REMAP_SCHEMA=KC1:KC2 EXCLUDE=USER` imported it; green migrated it. The full-run copy took ~40-60 s
+  for the export and ~20-90 s for the import on this machine.
+- The Oracle Free container starts standalone under 2 GiB, but the in-cluster first start is OOMKilled
+  at 2 GiB and 3 GiB: the 3.0 GiB 7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` needs 4 GiB.
+  4 GiB is the default `ORACLE_MEMORY`; `oracle-7z` completed at 4 GiB.
+- Fixes found by the full run: `EXCLUDE=USER` on the import (target user is pre-created), `kc2` not `kc-2`
+  as the next schema name, the Keycloak 25 overlay must repeat `KC_DB`/`KC_DB_URL` (Helm replaces
+  `extraEnvVars`), SQL*Plus needs a statement terminator before `exit`, schema drop must kill sessions and
+  retry, and the readiness probe needs a 5 s timeout (the 1 s default removed all endpoints during a
+  337-session purge).
 
-Not validated: the full Jenkins five-case run on Oracle, 19.3 EE image startup (no Oracle registry
-login here), the in-cluster chart path (the component tests ran the images directly, not through the
-Bitnami chart), Data Guard/RAC, and a live 25->26 schema migration on a Data Pump copy. The
-`helm template` render was checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
+Not validated: 19.3 EE image startup (the Oracle registry returned `unauthorized`; no Oracle SSO
+credentials were available on this machine), Data Guard/RAC, RMAN/PITR, and a 19.3-specific
+refreshable-PDB path. The `helm template` render was checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
 
 ## Limits
 
