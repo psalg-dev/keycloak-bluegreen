@@ -14,15 +14,13 @@ KC_IMAGE=kc-bluegreen/keycloak
 # docs/oracle.md; the zero-downtime mechanism does not depend on it.
 DB_HOST=${DB_HOST:-oracle}
 DB_SERVICE=${DB_SERVICE:-FREEPDB1}
-ORACLE_IMAGE=${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim} # optional 19.3 EE: container-registry.oracle.com/database/enterprise:19.3.0.0
+ORACLE_IMAGE=${ORACLE_IMAGE:-mohammedesafi/oracle-database:19.3.0-ee} # community 19.3 EE; gvenzl Free alternative: gvenzl/oracle-free:23.26.3-slim
 ORACLE_PULL_SECRET=${ORACLE_PULL_SECRET:-}
 ORACLE_PULL_SECRET_FILE=${ORACLE_PULL_SECRET_FILE:-} # docker config.json; up.sh turns it into the k8s secret
 ORACLE_ADMIN_SECRET=${ORACLE_ADMIN_SECRET:-oracle-admin}
 ORACLE_DUMP_DIR=${ORACLE_DUMP_DIR:-/opt/oracle/oradata/dpdump}
-# Oracle Free's documented minimum is 2 GiB, but the Kubernetes pod also mounts a 1 GiB memory-backed /dev/shm
-# and the image's first start decompresses a 3.0 GiB database archive with 32-thread 7-Zip: 2 GiB (and even 3 GiB)
-# is OOMKilled during that extraction in-cluster. 4 GiB is the tested default; a standalone container starts at 2 GiB.
-ORACLE_MEMORY=${ORACLE_MEMORY:-4Gi}
+# gvenzl Free needs 4 GiB in-cluster (1 GiB /dev/shm + 3.0 GiB first-start extraction); the 19.3 DBCA run used 6 GiB.
+ORACLE_MEMORY=${ORACLE_MEMORY:-6Gi}
 ORACLE_STORAGE=${ORACLE_STORAGE:-20Gi}
 ORACLE_SGA_MB=${ORACLE_SGA_MB:-1024}
 ORACLE_PGA_MB=${ORACLE_PGA_MB:-512}

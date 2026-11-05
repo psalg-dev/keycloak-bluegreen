@@ -4,11 +4,11 @@ A self-contained demo of zero-downtime Keycloak upgrades on Kubernetes (KinD): t
 ingress-nginx, Oracle Database instead of Postgres, realm configuration through keycloak-config-cli, driven by Jenkins,
 measured by k6 and two OIDC test apps while the cutover happens, and judged by a gate plus an HTML report.
 
-> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The fast default is
-> `gvenzl/oracle-free:23.26.3-slim`. The full five-case validation also ran on the Docker Hub **Oracle 19.3 EE** image
-> `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official 19.3 Dockerfiles, OTN Developer
-> License; not a production-supported image) with `ORACLE_MEMORY=6Gi` and every gate PASSes. The route, tools and
-> limits are in [docs/oracle.md](docs/oracle.md).
+> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The default is the Docker Hub
+> **Oracle 19.3 EE** image `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official 19.3
+> Dockerfiles, OTN Developer License; not a production-supported image) with `ORACLE_MEMORY=6Gi`. The full five-case
+> validation ran on it and every gate PASSes. `gvenzl/oracle-free:23.26.3-slim` remains a fast alternative for a
+> smaller, no-login image. The route, tools and limits are in [docs/oracle.md](docs/oracle.md).
 
 Nothing is mocked on the path that matters: real brokered logins against a legacy Spring Authorization Server (users
 live there; Keycloak holds no passwords), real token refreshes, logouts, back-/front-channel logout, introspection and
@@ -48,8 +48,8 @@ one each in `minor`/`major` (green gets a Data Pump copy of blue's at an SCN).
 
 ## Run it
 
-Requirements: Docker with about 16 GB for the containers (the Oracle instance is 4 GiB for gvenzl Free, 6 GiB for
-19.3; measured Postgres peak was 14.8 GiB, see Results), git,
+Requirements: Docker with about 16 GB for the containers (the Oracle 19.3 instance is 6 GiB; 4 GiB for gvenzl Free;
+measured Postgres peak was 14.8 GiB, see Results), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
 `bash scripts/preflight.sh` (the launcher runs it first) checks exactly that: Docker daemon, Docker VM memory for the
@@ -70,7 +70,7 @@ docker compose up -d jenkins
 
 1. `jenkins-secret.sh` generates the Jenkins admin password into `out/jenkins-admin-password` (gitignored).
 2. The launcher runs `scripts/up.sh`: KinD cluster (1 control plane + 3 workers labelled zones a/b/c), ingress-nginx,
-   the Oracle instance (4 GiB Free / 6 GiB for 19.3), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
+   the Oracle 19.3 instance (6 GiB), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
    and a first blue Keycloak on schema `kc1`. Idempotent; the first run builds images and creates the Oracle database
    (a few minutes; 19c EE takes longer).
 3. Jenkins: <http://localhost:8081>, user `admin`, password from step 1. Job **kc-bluegreen**, parameter `CASE`.
@@ -116,9 +116,10 @@ Then run cases with `PROFILE=laptop` (Jenkins build parameter, or
 a run with a different `PROFILE` stops before it changes anything.
 
 Laptop = 2 KinD workers (zones a, b) instead of 3, 2 Keycloak pods per color instead of 3 (PDB 1 of 2, 1 GiB memory
-limit), the same 4 GiB Oracle instance, the same load profile (2 logins/s, 3 app VUs), 2 ingress-nginx workers. Same
-images, config stages, switch scripts and gate rules. Give Docker Desktop / WSL2 about 13 GB (`.wslconfig`:
-`memory=13GB`); Oracle is the reason this is no longer a 10 GB profile.
+limit), the same 4 GiB gvenzl Free Oracle instance (the 19.3 default needs the full profile), the same load profile
+(2 logins/s, 3 app VUs), 2 ingress-nginx workers. Same images, config stages, switch scripts and gate rules. Give
+Docker Desktop / WSL2 about 13 GB (`.wslconfig`: `memory=13GB`); Oracle is the reason this is no longer a 10 GB
+profile.
 
 Measured over all five Postgres cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with
 Jenkins (rollback phase of `minor-rollback`: both colors and both Postgres clusters up). No Oracle memory measurement
@@ -149,7 +150,7 @@ back to back. Every gate PASSes. The database is Oracle 19.3 EE from the Docker 
 `mohammedesafi/oracle-database:19.3.0-ee` (a community build of Oracle's official 19.3 Dockerfiles, OTN Developer
 License; not an Oracle-supported production image), with `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`,
 `ORACLE_MEMORY=6Gi`. The full report is `out/oracle19c-run/report.html` (gitignored; Jenkins archives the same file).
-The gvenzl Oracle Free image is still the fast default and also passed all five cases (report
+The gvenzl Oracle Free image is the fast alternative and also passed all five cases (report
 `out/oracle-run/report.html`).
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |

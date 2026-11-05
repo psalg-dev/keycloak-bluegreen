@@ -23,7 +23,7 @@ else
 fi
 
 # 2. Docker VM memory against the profile's measured peak (default 14.8 GiB with Jenkins, laptop 9.1 GiB on
-# Postgres). Oracle adds a 4 GiB instance and removes the CNPG instances; the Oracle branch needs ~15 GiB default
+# Postgres). Oracle 19.3 adds a 6 GiB instance and removes the CNPG instances; the Oracle branch needs ~15 GiB default
 # and ~13 GiB laptop.
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
 need=$([[ ${PROFILE} == laptop ]] && echo 13 || echo 15) # GiB

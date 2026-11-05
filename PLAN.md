@@ -6,7 +6,7 @@
 > baseline and stays as the record of why the mechanisms are shaped this way; where it
 > names `pg-*`, CNPG or `psql`, read "Oracle schema", "Oracle instance" and SQL*Plus for this
 > branch. The known limits that still apply are the app-level lossy ones; the Oracle-specific
-> limits (single instance, Data Pump copy, 19.3 vs 23ai Free) are in docs/oracle.md.
+> limits (single instance, Data Pump copy, 19.3 and the gvenzl Free alternative) are in docs/oracle.md.
 
 Research and decision trail: `C:\dev\_worklogs\keycloak-bluegreen\2026-11-02-research-design-questions.md`.
 

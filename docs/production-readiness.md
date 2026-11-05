@@ -9,7 +9,7 @@ auth server, `hostname-strict=false` behind several ingresses.
 
 > **Branch `oracle-19c`:** the demo now uses Oracle instead of CNPG/Postgres. The DB-specific
 > sections below (notably 4.1, the copy step, backups/PITR and DB metrics) describe the
-> Postgres baseline. The Oracle route, its 19.3/23ai Free split and its production gaps
+> Postgres baseline. The Oracle route, its 19.3/Free images and its production gaps
 > (Data Guard/RAC, RMAN, AWR, refreshable PDB clone) are in
 > [docs/oracle.md](docs/oracle.md). Where this document says "CNPG", read "Oracle instance"
 > for this branch; the app-level readiness findings are unchanged.

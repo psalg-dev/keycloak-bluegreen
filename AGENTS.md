@@ -25,9 +25,10 @@ docker compose up -d jenkins
 ```
 
 `up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, one Oracle instance
-(4 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
-`PROFILE=laptop` on every command; Oracle needs a 13 GiB Docker VM there, not the old 10 GiB. 19.3 EE instead of the
-default 23ai Free: see `docs/oracle.md` (`ORACLE_IMAGE`, `ORACLE_PULL_SECRET_FILE`).
+(6 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
+`PROFILE=laptop` on every command; the laptop profile is sized for gvenzl Free (13 GiB Docker VM), not 19.3. For the
+smaller gvenzl Free image instead of the default 19.3, see `docs/oracle.md` (`ORACLE_IMAGE`,
+`ORACLE_PULL_SECRET_FILE`).
 
 Done when `docker compose run --rm launcher bash scripts/check-cluster.sh blue` passes and http://localhost:8081
 answers (user `admin`, password in `out/jenkins-admin-password`).

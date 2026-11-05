@@ -3,11 +3,11 @@
 Branch `oracle-19c`. This replaces the demo's database engine; the Keycloak blue/green
 contract, load, gate and report stay. The short version:
 
-- **The fast default is `gvenzl/oracle-free:23.26.3-slim`** (Oracle AI Database 26ai Free
-  23.26.3, the 23.x line). **The full five-case validation was also run on Oracle 19.3 EE**
-  from the Docker Hub image `mohammedesafi/oracle-database:19.3.0-ee` (community build of
-  Oracle's official 19.3 Dockerfiles, OTN Developer License), with `ORACLE_MEMORY=6Gi` and
-  `ORACLE_PDB=FREEPDB1`; every gate passed.
+- **The default is Oracle 19.3 EE** from the Docker Hub image
+  `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official 19.3
+  Dockerfiles, OTN Developer License), with `ORACLE_MEMORY=6Gi` and `ORACLE_PDB=FREEPDB1`;
+  the full five-case validation ran on it and every gate passed. `gvenzl/oracle-free:23.26.3-slim`
+  is the faster, smaller alternative and passed the same five cases.
 - Oracle 19c has no free Express Edition (18c and 21c XE exist; 19c does not), and the
   official 19.3 EE image is on Oracle Container Registry behind an Oracle SSO login. The
   Docker Hub 19.3 image used here is a community build, not an Oracle-supported production
@@ -130,31 +130,30 @@ Once on Oracle, the blue/green mechanisms in this branch apply to Keycloak upgra
 
 ## Running it
 
-### Default: 23ai Free, no registry login
+### Default: 19.3 EE from Docker Hub (validated)
 
 ```bash
 bash scripts/jenkins-secret.sh
-docker compose run --rm launcher          # creates KinD + Oracle + kc1 + blue
+docker compose run --rm launcher          # creates KinD + Oracle 19.3 + kc1 + blue
 docker compose up -d jenkins
 # Jenkins: CASE=patch|minor|major, as on main
 ```
 
-The first `up.sh` creates the Oracle database; gvenzl Free takes a few minutes, the 19.3 image takes ~15-20.
-`reset.sh` only drops/recreates schemas, so later cases are fast. Use `ORACLE_MEMORY=4Gi` for gvenzl Free and
-`6Gi` for 19.3; give Docker 15 GiB (13 GiB for `PROFILE=laptop`, which is Free-sized).
+`ORACLE_IMAGE` defaults to `mohammedesafi/oracle-database:19.3.0-ee`, `ORACLE_SID=ORCLCDB`,
+`ORACLE_MEMORY=6Gi`. This is a community build of Oracle's official 19.3 Dockerfiles under the OTN Developer
+License: development/test only, not an Oracle-supported production image. The first `up.sh` creates `ORCLCDB` and
+`FREEPDB1`; it takes ~15-20 min. `reset.sh` only drops/recreates schemas, so later cases are fast.
 
-### 19.3 EE from Docker Hub (validated)
+### gvenzl Free (faster, smaller, no login)
 
 ```bash
-export ORACLE_IMAGE=mohammedesafi/oracle-database:19.3.0-ee
-export ORACLE_SID=ORCLCDB
-export ORACLE_MEMORY=6Gi
+export ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim
+export ORACLE_MEMORY=4Gi
 docker compose run --rm launcher
 ```
 
-This is a community build of Oracle's official 19.3 Dockerfiles under the OTN Developer License: development/test
-only, not an Oracle-supported production image. It is the image the five-case 19.3 run used. The first start creates
-`ORCLCDB` and `FREEPDB1`; the probes wait for `FREEPDB1` to be open read-write.
+The Free image starts in a few minutes and passed the same five cases. Give Docker 15 GiB (13 GiB for
+`PROFILE=laptop`, which is Free-sized; 19.3 does not fit the laptop profile).
 
 ### Official Oracle 19.3 EE (optional, needs Oracle SSO)
 
@@ -213,7 +212,7 @@ sessions lost with 3 silent re-logins; `major` 5/5; both Data Pump copies caught
 211 -> 238 (minor) and 134 -> 238 (major).
 
 The **gvenzl Oracle Free** path also passed all five cases (Jenkins builds #2/#4/#6/#7/#9, report
-`out/oracle-run/report.html`), with the 4 GiB default and a much faster first start.
+`out/oracle-run/report.html`), with its 4 GiB profile and a much faster first start.
 
 Component checks behind it:
 
@@ -251,19 +250,19 @@ RMAN/PITR, and a refreshable-PDB path. The `helm template` render was checked fo
 - **Data Pump is a logical copy.** It needs undo retention for the SCN export and time
   proportional to schema size. The demo's schema is small; a large production realm should
   use a refreshable PDB clone (same CDB) or a pre-created copy.
-- **`ORACLE_IMAGE` default is 23ai Free**, not 19.3, for the reason at the top. The
-  compatibility claim is about the Keycloak/Liquibase/Data Pump path, not a claim that the
-  Free image is 19c.
+- **The default 19.3 image is a community Docker Hub build**, not an Oracle-supported production image. The SQL,
+  JDBC and Data Pump path is the real 19.3 EE path; for production use the official Oracle Container Registry image
+  (needs Oracle SSO) or your licensed 19.3 installation. The gvenzl Free alternative is 23ai Free, not 19c; its
+  compatibility claim is about the Keycloak/Liquibase/Data Pump path.
 - **Oracle Free data cap**: 23ai Free is limited (12 GB user data); the demo's 4000 users are
   far below it. 19c EE has no such cap.
 - **Keycloak 25**: Oracle support is via `--db=oracle`, `persistent-user-sessions`; the
   `jdbc-ping` Oracle fix is a 26.x change, so 25 keeps `cache-stack=kubernetes`.
-- **Oracle memory.** gvenzl Free defaults to 4 GiB. A standalone container starts at 2 GiB, but in
-  Kubernetes the 3.0 GiB 7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` was OOMKilled at 2 and 3 GiB;
-  4 GiB is the tested in-cluster default for Free. The 19.3 EE image used 6 GiB (`ORACLE_MEMORY=6Gi`); its
-  first DBCA run takes ~15-20 minutes and the probes allow 30.
-- **Laptop profile**: still 2 workers/2 pods, but Oracle Free needs 4 GiB; give Docker 13 GiB, not
-  the 10 GiB used by the Postgres laptop profile. The 19.3 image does not fit the 13 GiB laptop profile.
+- **Oracle memory.** The default 19.3 container is 6 GiB. Its first DBCA run takes ~15-20 minutes and the probes
+  allow 30. gvenzl Free defaults to 4 GiB: a standalone container starts at 2 GiB, but in Kubernetes the 3.0 GiB
+  7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` was OOMKilled at 2 and 3 GiB.
+- **Laptop profile**: still 2 workers/2 pods, sized for gvenzl Free (13 GiB Docker VM). The 19.3 image does not fit
+  that profile; use the default profile on a machine with ~16 GB+ for Docker.
 - **No measured Oracle results yet.** The README's Results table is the Postgres baseline
   from `main`; do not quote it as Oracle numbers. Run the five cases on this branch to
   produce the Oracle table.
