@@ -4,11 +4,11 @@ A self-contained demo of zero-downtime Keycloak upgrades on Kubernetes (KinD): t
 ingress-nginx, Oracle Database instead of Postgres, realm configuration through keycloak-config-cli, driven by Jenkins,
 measured by k6 and two OIDC test apps while the cutover happens, and judged by a gate plus an HTML report.
 
-> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The demo and the full
-> validation use `gvenzl/oracle-free:23.26.3-slim` (Oracle Database Free, 23.x). That is the supported image here;
-> 19.3 EE is an optional production variant and is not part of this validation. The route, tools and limits are in
-> [docs/oracle.md](docs/oracle.md). The Results table is the **Oracle Free run of 2026-11-04**, all five cases
-> gate-pass.
+> **Branch `oracle-19c`.** The engine is Oracle; the zero-downtime contract is unchanged. The fast default is
+> `gvenzl/oracle-free:23.26.3-slim`. The full five-case validation also ran on the Docker Hub **Oracle 19.3 EE** image
+> `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official 19.3 Dockerfiles, OTN Developer
+> License; not a production-supported image) with `ORACLE_MEMORY=6Gi` and every gate PASSes. The route, tools and
+> limits are in [docs/oracle.md](docs/oracle.md).
 
 Nothing is mocked on the path that matters: real brokered logins against a legacy Spring Authorization Server (users
 live there; Keycloak holds no passwords), real token refreshes, logouts, back-/front-channel logout, introspection and
@@ -48,8 +48,8 @@ one each in `minor`/`major` (green gets a Data Pump copy of blue's at an SCN).
 
 ## Run it
 
-Requirements: Docker with about 16 GB for the containers (the Oracle instance is 4 GiB; measured Postgres peak was
-14.8 GiB, see Results), git,
+Requirements: Docker with about 16 GB for the containers (the Oracle instance is 4 GiB for gvenzl Free, 6 GiB for
+19.3; measured Postgres peak was 14.8 GiB, see Results), git,
 bash with `curl`, `jq` and `openssl` on the host (Git Bash works on Windows). Everything else (kind, kubectl, helm,
 Maven, GraalVM, k6) runs in containers. Hostnames are `*.localtest.me`, which resolve to 127.0.0.1 publicly.
 `bash scripts/preflight.sh` (the launcher runs it first) checks exactly that: Docker daemon, Docker VM memory for the
@@ -70,7 +70,7 @@ docker compose up -d jenkins
 
 1. `jenkins-secret.sh` generates the Jenkins admin password into `out/jenkins-admin-password` (gitignored).
 2. The launcher runs `scripts/up.sh`: KinD cluster (1 control plane + 3 workers labelled zones a/b/c), ingress-nginx,
-   the Oracle instance (4 GiB), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
+   the Oracle instance (4 GiB Free / 6 GiB for 19.3), certificates (demo CA in `out/certs/ca.crt`), the legacy IdP, the two native test apps,
    and a first blue Keycloak on schema `kc1`. Idempotent; the first run builds images and creates the Oracle database
    (a few minutes; 19c EE takes longer).
 3. Jenkins: <http://localhost:8081>, user `admin`, password from step 1. Job **kc-bluegreen**, parameter `CASE`.
@@ -123,7 +123,7 @@ images, config stages, switch scripts and gate rules. Give Docker Desktop / WSL2
 Measured over all five Postgres cases (2.3 h of 15 s samples): **8.1 GiB** peak for the KinD nodes, **9.1 GiB** with
 Jenkins (rollback phase of `minor-rollback`: both colors and both Postgres clusters up). No Oracle memory measurement
 has been recorded yet. The default Postgres profile peaked at 13.8 GiB / 14.8 GiB (Results); Oracle replaces the CNPG
-instances with one 4 GiB instance, so expect a similar or slightly higher peak. Not shown on the laptop profile: the
+instances with one 4 GiB (Free) or 6 GiB (19.3) instance, so expect a similar or slightly higher peak. Not shown on the laptop profile: the
 3-zone spread, a pod kill that leaves 2 serving pods per color (here 1), the production PDB of 2 out of 3. Latency
 numbers are comparable within a run, not across profiles.
 
@@ -143,57 +143,58 @@ numbers are comparable within a run, not across profiles.
 
 ## Results
 
-**Oracle run, 2026-11-04:** Jenkins builds **#2** (`patch`), **#4** (`minor`), **#6** (`major`), **#7**
-(`patch-rollback`), **#9** (`minor-rollback`) on the `oracle-19c` branch, default profile, one KinD cluster, five cases
-back to back. Every gate PASSes. The database is **Oracle Database Free
-(`gvenzl/oracle-free:23.26.3-slim`)**; 19.3 EE is optional and was not used ([docs/oracle.md](docs/oracle.md)).
-Fixes landed between cases; the last case ran at commit `65a6c80`. The full report is `out/oracle-run/report.html`
-(gitignored; Jenkins archives the same file).
+**Oracle 19.3 run, 2026-11-04:** Jenkins builds **#1** (`patch`), **#3** (`minor`), **#4** (`major`), **#5**
+(`patch-rollback`), **#6** (`minor-rollback`) on the `oracle-19c` branch, default profile, one KinD cluster, five cases
+back to back. Every gate PASSes. The database is Oracle 19.3 EE from the Docker Hub image
+`mohammedesafi/oracle-database:19.3.0-ee` (a community build of Oracle's official 19.3 Dockerfiles, OTN Developer
+License; not an Oracle-supported production image), with `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`,
+`ORACLE_MEMORY=6Gi`. The full report is `out/oracle19c-run/report.html` (gitignored; Jenkins archives the same file).
+The gvenzl Oracle Free image is still the fast default and also passed all five cases (report
+`out/oracle-run/report.html`).
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
 |---|---|---|---|---|---|
-| k6 requests | 16,112 | 16,494 | 17,525 | 24,391 | 15,354 |
+| k6 requests | 14,744 | 15,902 | 14,552 | 21,156 | 14,761 |
 | 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
-| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.22 % (0.43 %) | 0.46 % (0.76 %) | 0.35 % (0.58 %) |
-| users potentially impacted (of users seen) | 0 of 938 | 8 of 949 (0.8 %) | 27 of 1,015 (2.7 %) | 68 of 1,314 (5.2 %) | 25 of 904 (2.8 %) |
-| lossy window (copy point -> switch) | - | - | 198.7 s | 168.5 s | 168.6 s |
-| sessions lost = silent re-logins | 0 | 0 | 4 | 6 (+3 green-born, at the rollback) | 5 |
-| logouts / new users replayed | - | - | 27 / 93 | 23 / 62 forward, 21 / 82 back | 21 / 70 |
-| users repaired (post-flip race) | - | - | 0 | 1 | 0 |
-| resurrection window (switch -> replay done) | - | - | 59.0 s | 60.8 s, rollback 49.3 s | 50.5 s |
-| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.1 s | 43.8 s | - | - | - |
-| rollback (start -> traffic on the old color) | - | 0.02 s (Service flip) | - | 50.6 s (reverse replay + purge) | - |
-| p95 network latency pre / cutover / post | 73 / 78 / 66 ms | 115 / 97 / 90 ms | 97 / 82 / 72 ms | 135 / 105 / 92 ms | 73 / 71 / 76 ms |
-| step classes with cutover p95 > 2x | introspection 2.18x | none | none | none | none |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.27 % (0.60 %) | 0.49 % (0.97 %) | 0.25 % (0.47 %) |
+| users potentially impacted (of users seen) | 4 of 890 (slow only) | 2 of 945 (slow only) | 31 of 871 (3.6 %) | 63 of 1,185 (5.3 %) | 28 of 875 (3.2 %) |
+| lossy window (copy point -> switch) | - | - | 147.5 s | 124.4 s | 153.4 s |
+| sessions lost = silent re-logins | 0 | 0 | 3 | 6 (+4 green-born, at the rollback) | 5 |
+| logouts / new users replayed | - | - | 20 / 61 | 18 / 49 forward, 19 / 66 back | 22 / 74 |
+| users repaired (post-flip race) | - | - | 0 | 0 | 0 |
+| resurrection window (switch -> replay done) | - | - | 46.5 s | 40.9 s, rollback 42.4 s | 47.4 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.1 s | 48.5 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 41.1 s (reverse replay + purge) | - |
+| p95 network latency pre / cutover / post | 75 / 79 / 66 ms | 92 / 90 / 80 ms | 82 / 75 / 71 ms | 96 / 87 / 81 ms | 77 / 71 / 76 ms |
+| step classes with cutover p95 > 2x | none | introspection 3.48x | none | none | none |
 | schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
 
 Reading it:
 
-- **Users first**: 27 of 1,015 people in `minor`, 68 of 1,314 in `minor-rollback` and 25 of 904 in `major` were
+- **Users first**: 31 of 871 people in `minor`, 63 of 1,185 in `minor-rollback` and 28 of 875 in `major` were
   potentially impacted - they hit at least one error line (a lost session's `invalid_grant`, a straddling login, a
-  channel logout for a session Keycloak no longer had) or a request over 1 s. The shared cases: nobody in `patch`,
-  eight in `patch-rollback` (slow only). The report counts each user once; the definition is in
+  channel logout for a session Keycloak no longer had) or a request over 1 s. The shared cases: four slow-only users
+  in `patch`, two in `patch-rollback`, no errors. The report counts each user once; the definition is in
   [docs/failure-modes.md](docs/failure-modes.md).
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
   the flip (started on blue, finished on green; the next attempt goes through legacy SSO), refreshes of sessions born
   in the lossy window (`invalid_grant`, then a silent re-login), and the apps' back-/front-channel logouts for those
   sessions (Keycloak on green never knew them). No session born before the copy point was lost, no logged-out session
-  came back after the replay. In `minor-rollback` one person was created twice in the post-flip race; the replay
-  repaired them (first `sub` restored) and the gate excuses exactly that user.
-- The shared cases (same Oracle schema) lose nothing. `patch` has one class over 2x, introspection 2.18x, inside a
-  cutover window that also holds a pod kill (3 -> 2 pods for ~43 s); `patch-rollback`, same mechanism, has none. One
-  run per case on one machine: expect run-to-run spread of that size.
+  came back after the replay, and no duplicate user needed repair in this run.
+- The shared cases (same Oracle schema) lose nothing. `patch-rollback` has one class over 2x, introspection 3.48x,
+  inside a cutover window that also holds a pod kill; `patch` has none. One run per case on one machine: expect
+  run-to-run spread of that size.
 - Admin and account console answer 503 for the whole cutover window in the lossy cases (copy point -> window end,
-  ~170-200 s). Login, token, refresh, logout, discovery and JWKS never stop.
+  ~125-155 s). Login, token, refresh, logout, discovery and JWKS never stop.
 - The Data Pump copy is visible in the report: `copy_point`/`promoted` carry the same SCN, and every green schema
-  ends at the target Keycloak changeset count (238). The Oracle instance is one 4 GiB pod; no Oracle memory sample was
-  taken in this five-case run. The earlier Postgres baseline peaked at 13.8/14.8 GiB.
+  ends at the target Keycloak changeset count (238). The Oracle instance is one 6 GiB pod; no Oracle memory sample was
+  taken in this five-case run.
 
 The full numbers, per failure mode and per step class, are in the report (one tab per case).
 
 ## More
 
-- [docs/oracle.md](docs/oracle.md): the Oracle route, Data Pump cutover, 19.3 vs 23ai Free, tools, limits.
+- [docs/oracle.md](docs/oracle.md): the Oracle route, Data Pump cutover, 19.3/Free images, tools, limits.
 - [PLAN.md](PLAN.md): design, decisions and the **known limits** (the Postgres sections are the historical design;
   docs/oracle.md is the Oracle delta).
 - [docs/production-readiness.md](docs/production-readiness.md): what it would take to run this in an enterprise.

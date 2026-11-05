@@ -1,14 +1,17 @@
-# Oracle Database Free instead of Postgres: route, tools, zero-downtime analysis
+# Oracle 19.3 instead of Postgres: route, tools, zero-downtime analysis
 
 Branch `oracle-19c`. This replaces the demo's database engine; the Keycloak blue/green
 contract, load, gate and report stay. The short version:
 
-- **The demo and the full validation use `gvenzl/oracle-free:23.26.3-slim`** (Oracle AI
-  Database 26ai Free 23.26.3, the 23.x line). That is the supported image here. It is not
-  Oracle 19.3: 19c has no free Express Edition (18c and 21c XE exist; 19c does not), and the
-  19.3 EE image is behind an Oracle registry login. The SQL, JDBC driver, schema handling and
-  Data Pump cutover are 19.3-compatible, but 19.3 EE is optional and not part of this
-  validation.
+- **The fast default is `gvenzl/oracle-free:23.26.3-slim`** (Oracle AI Database 26ai Free
+  23.26.3, the 23.x line). **The full five-case validation was also run on Oracle 19.3 EE**
+  from the Docker Hub image `mohammedesafi/oracle-database:19.3.0-ee` (community build of
+  Oracle's official 19.3 Dockerfiles, OTN Developer License), with `ORACLE_MEMORY=6Gi` and
+  `ORACLE_PDB=FREEPDB1`; every gate passed.
+- Oracle 19c has no free Express Edition (18c and 21c XE exist; 19c does not), and the
+  official 19.3 EE image is on Oracle Container Registry behind an Oracle SSO login. The
+  Docker Hub 19.3 image used here is a community build, not an Oracle-supported production
+  image; the SQL, JDBC driver, schema handling and Data Pump cutover are the same.
 - **Zero downtime is preserved the same way it is on Postgres**: a shared schema for patch
   upgrades, and a lossy overlap for minor/major. Oracle changes the *copy tool*, not the
   app-level contract.
@@ -136,19 +139,32 @@ docker compose up -d jenkins
 # Jenkins: CASE=patch|minor|major, as on main
 ```
 
-The first `up.sh` creates the Oracle database; it takes a few minutes (19c EE can take ~10).
-`reset.sh` only drops/recreates schemas, so later cases are fast. Oracle is a 4 GiB instance;
-give Docker 15 GiB (13 GiB for `PROFILE=laptop`).
+The first `up.sh` creates the Oracle database; gvenzl Free takes a few minutes, the 19.3 image takes ~15-20.
+`reset.sh` only drops/recreates schemas, so later cases are fast. Use `ORACLE_MEMORY=4Gi` for gvenzl Free and
+`6Gi` for 19.3; give Docker 15 GiB (13 GiB for `PROFILE=laptop`, which is Free-sized).
 
-### Optional: 19.3 EE (not used in this validation)
+### 19.3 EE from Docker Hub (validated)
 
-The default is the gvenzl Free image above. If you specifically need the 19.3 EE image, it needs an
-Oracle SSO login and a Kubernetes pull secret; this path is documented for completeness, but it was
-not started or measured on this branch.
+```bash
+export ORACLE_IMAGE=mohammedesafi/oracle-database:19.3.0-ee
+export ORACLE_SID=ORCLCDB
+export ORACLE_MEMORY=6Gi
+docker compose run --rm launcher
+```
+
+This is a community build of Oracle's official 19.3 Dockerfiles under the OTN Developer License: development/test
+only, not an Oracle-supported production image. It is the image the five-case 19.3 run used. The first start creates
+`ORCLCDB` and `FREEPDB1`; the probes wait for `FREEPDB1` to be open read-write.
+
+### Official Oracle 19.3 EE (optional, needs Oracle SSO)
+
+If you have Oracle Container Registry access, the official image is a drop-in replacement:
 
 ```bash
 docker login container-registry.oracle.com   # Oracle SSO account
 export ORACLE_IMAGE=container-registry.oracle.com/database/enterprise:19.3.0.0
+export ORACLE_SID=ORCLCDB
+export ORACLE_MEMORY=6Gi
 export ORACLE_PULL_SECRET=oracle-regcred
 export ORACLE_PULL_SECRET_FILE=/tmp/docker-config.json # path INSIDE the launcher
 docker compose run --rm -v "$HOME/.docker/config.json:/tmp/docker-config.json:ro" launcher
@@ -164,6 +180,8 @@ kubectl -n keycloak create secret docker-registry oracle-regcred \
   --docker-server=container-registry.oracle.com --docker-username='<email>' \
   --docker-password='<token>' --docker-email='<email>'
 export ORACLE_IMAGE=container-registry.oracle.com/database/enterprise:19.3.0.0
+export ORACLE_SID=ORCLCDB
+export ORACLE_MEMORY=6Gi
 export ORACLE_PULL_SECRET=oracle-regcred
 docker compose run --rm launcher
 ```
@@ -175,22 +193,27 @@ The bootstrap script is mounted at both `/container-entrypoint-initdb.d` (gvenzl
 different image name; set `ORACLE_SID` explicitly if the image does not contain
 `oracle-free`/`oracle-xe` but is not a CDB with `ORCLCDB`.
 
-## Validation done on this branch (2026-11-04)
+## Validation done on this branch (2026-11-04/05)
 
-**Full five-case Jenkins/KinD run on Oracle 23ai Free, all gates PASS:**
+**Full five-case Jenkins/KinD run on Oracle 19.3 EE from Docker Hub, all gates PASS:**
 
 | Jenkins build | case | gate |
 |---|---|---|
-| #2 | `patch` (26.8.0 -> 26.8.1, shared) | `GATE PASS (shared)` |
-| #4 | `minor` (26.7.5 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
-| #6 | `major` (25.0.6 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
-| #7 | `patch-rollback` | `GATE PASS (shared-rollback)` |
-| #9 | `minor-rollback` | `GATE PASS (lossy-rollback)` |
+| #1 | `patch` (26.8.0 -> 26.8.1, shared) | `GATE PASS (shared)` |
+| #3 | `minor` (26.7.5 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
+| #4 | `major` (25.0.6 -> 26.8.1, Data Pump) | `GATE PASS (lossy)` |
+| #5 | `patch-rollback` | `GATE PASS (shared-rollback)` |
+| #6 | `minor-rollback` | `GATE PASS (lossy-rollback)` |
 
-The run used the Bitnami chart in KinD, `kc.sh start --optimized`, the 4 GiB Oracle StatefulSet, 3 Keycloak pods per
-color, and the same k6/apps/gate/report path as `main`. The report is `out/oracle-run/report.html` (gitignored; Jenkins
-archives it). Headline: 0 5xx in every case; `minor` 4 sessions lost with 4 silent re-logins; `major` 5/5; both Data
-Pump copies caught up to the declared SCN; changesets 211 -> 238 (minor) and 134 -> 238 (major).
+Image: `mohammedesafi/oracle-database:19.3.0-ee` — a community build of Oracle's official 19.3 Dockerfiles, OTN
+Developer License, not an Oracle-supported production image. Env: `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`,
+`ORACLE_MEMORY=6Gi`. First DB creation took ~15-20 min; the startup probe and `oracle_ready` allow 30 min. The report
+is `out/oracle19c-run/report.html` (gitignored; Jenkins archives it). Headline: 0 5xx in every case; `minor` 3
+sessions lost with 3 silent re-logins; `major` 5/5; both Data Pump copies caught up to the declared SCN; changesets
+211 -> 238 (minor) and 134 -> 238 (major).
+
+The **gvenzl Oracle Free** path also passed all five cases (Jenkins builds #2/#4/#6/#7/#9, report
+`out/oracle-run/report.html`), with the 4 GiB default and a much faster first start.
 
 Component checks behind it:
 
@@ -198,24 +221,26 @@ Component checks behind it:
   `Installed features: [... jdbc-oracle ...]`, `kc.sh build --db=oracle` succeeded. The same build with
   `KC_VERSION=25.0.6` (`--features=persistent-user-sessions`) also succeeded and created 134 changesets on
   Oracle with Keycloak 25.0.6.
-- Keycloak 26.8.1 started against `gvenzl/oracle-free:23.26.3-slim` (Oracle AI Database
-  26ai Free 23.26.3, the 23.x line) with `KC_DB_SCHEMA=KC1`: Liquibase created 102 tables and 237
-  changesets; JGroups `jdbc-ping` formed a cluster on Oracle; `/realms/master` answered 200.
+- Keycloak 26.8.1 started against `gvenzl/oracle-free:23.26.3-slim` and against the 19.3 image with
+  `KC_DB_SCHEMA=KC1`: Liquibase created 102 tables and 237 changesets; JGroups `jdbc-ping` formed a cluster;
+  `/realms/master` answered 200.
 - Data Pump: `expdp SCHEMAS=KC1 FLASHBACK_SCN=<scn>` exported the full Keycloak schema; `impdp
-  REMAP_SCHEMA=KC1:KC2 EXCLUDE=USER` imported it; green migrated it. The full-run copy took ~40-60 s
-  for the export and ~20-90 s for the import on this machine.
-- The Oracle Free container starts standalone under 2 GiB, but the in-cluster first start is OOMKilled
-  at 2 GiB and 3 GiB: the 3.0 GiB 7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` needs 4 GiB.
-  4 GiB is the default `ORACLE_MEMORY`; `oracle-7z` completed at 4 GiB.
-- Fixes found by the full run: `EXCLUDE=USER` on the import (target user is pre-created), `kc2` not `kc-2`
-  as the next schema name, the Keycloak 25 overlay must repeat `KC_DB`/`KC_DB_URL` (Helm replaces
-  `extraEnvVars`), SQL*Plus needs a statement terminator before `exit`, schema drop must kill sessions and
-  retry, and the readiness probe needs a 5 s timeout (the 1 s default removed all endpoints during a
-  337-session purge).
+  REMAP_SCHEMA=KC1:KC2 EXCLUDE=USER EXCLUDE=STATISTICS` imported it; green migrated it. On 19c the three
+  function-based index statistics fail with ORA-20000 even though every table/index/constraint imports; excluding
+  statistics avoids a false failure.
+- The gvenzl Free container starts standalone under 2 GiB, but the in-cluster first start is OOMKilled at 2/3 GiB:
+  the 3.0 GiB 7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` needs 4 GiB. The 19.3 run used 6 GiB.
+- A plain `sqlplus / as sysdba` succeeds while 19c DBCA is still building the PDB, so the pod went Ready too early and
+  `create_db` failed with exit 243. The probes and `oracle_ready` now require `V$PDBS` to show FREEPDB1 open
+  read-write; the first-start budget is 30 min.
+- Other fixes found by the full runs: `kc2` not `kc-2` as the next schema name, the Keycloak 25 overlay must repeat
+  `KC_DB`/`KC_DB_URL` (Helm replaces `extraEnvVars`), SQL*Plus needs a statement terminator before `exit`, schema
+  drop must kill sessions and retry, the readiness probe needs a 5 s timeout, and the launcher's BusyBox `sed` has no
+  `-u`.
 
-Out of scope for this branch: the 19.3 EE image (optional; it needs Oracle registry credentials and was
-not started), Data Guard/RAC, RMAN/PITR, and a refreshable-PDB path. The `helm template` render was
-checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
+Out of scope for this branch: the Oracle Container Registry 19.3 image (needs an Oracle SSO login), Data Guard/RAC,
+RMAN/PITR, and a refreshable-PDB path. The `helm template` render was checked for
+`KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
 
 ## Limits
 
@@ -233,13 +258,12 @@ checked for `KC_DB_URL`/`KC_DB`/`KC_DB_SCHEMA`.
   far below it. 19c EE has no such cap.
 - **Keycloak 25**: Oracle support is via `--db=oracle`, `persistent-user-sessions`; the
   `jdbc-ping` Oracle fix is a 26.x change, so 25 keeps `cache-stack=kubernetes`.
-- **Oracle memory.** The default is a 4 GiB container. A standalone container starts at 2 GiB, but in
-  Kubernetes the first-start 7-Zip extraction of the 3.0 GiB database archive plus the 1 GiB memory-backed
-  `/dev/shm` was OOMKilled at 2 GiB and 3 GiB; 4 GiB is the tested in-cluster default. 19.3 EE has a
-  larger footprint; if it fails to start, set `ORACLE_MEMORY=5Gi` and (for 19c) `ORACLE_SGA_MB=1536` /
-  `ORACLE_PGA_MB=768`. The preflight memory requirement goes up accordingly.
-- **Laptop profile**: still 2 workers/2 pods, but Oracle needs 4 GiB; give Docker 13 GiB, not
-  the 10 GiB used by the Postgres laptop profile.
+- **Oracle memory.** gvenzl Free defaults to 4 GiB. A standalone container starts at 2 GiB, but in
+  Kubernetes the 3.0 GiB 7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` was OOMKilled at 2 and 3 GiB;
+  4 GiB is the tested in-cluster default for Free. The 19.3 EE image used 6 GiB (`ORACLE_MEMORY=6Gi`); its
+  first DBCA run takes ~15-20 minutes and the probes allow 30.
+- **Laptop profile**: still 2 workers/2 pods, but Oracle Free needs 4 GiB; give Docker 13 GiB, not
+  the 10 GiB used by the Postgres laptop profile. The 19.3 image does not fit the 13 GiB laptop profile.
 - **No measured Oracle results yet.** The README's Results table is the Postgres baseline
   from `main`; do not quote it as Oracle numbers. Run the five cases on this branch to
   produce the Oracle table.
