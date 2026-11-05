@@ -60,6 +60,7 @@ if [[ -n $ORACLE_PULL_SECRET && -n $ORACLE_PULL_SECRET_FILE ]]; then
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 fi
 # envsubst takes only the template's inputs: an unrestricted call would eat Oracle's V$PDBS in the probe SQL.
+# shellcheck disable=SC2016 # the single-quoted list is envsubst's variable whitelist, not a shell expansion
 NS=$NS DB_SERVICE=$DB_SERVICE ORACLE_IMAGE=$ORACLE_IMAGE ORACLE_SID=$ORACLE_SID \
   ORACLE_ADMIN_SECRET=$ORACLE_ADMIN_SECRET ORACLE_CPUS=$ORACLE_CPUS ORACLE_MEMORY=$ORACLE_MEMORY \
   ORACLE_SGA_MB=$ORACLE_SGA_MB ORACLE_PGA_MB=$ORACLE_PGA_MB ORACLE_STORAGE=$ORACLE_STORAGE \
