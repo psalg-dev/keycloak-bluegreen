@@ -36,11 +36,12 @@ log() { printf '%s %s%s\n' "$(date -u +%FT%TZ)" "${TAG:+[$TAG] }" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
 
 # PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color).
-# laptop = fits a 16 GB laptop (Docker VM 8-10 GB): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
+# laptop = fits a 16 GB laptop (Docker VM ~13 GiB, gvenzl Free only): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
 # (2 pods/color, PDB 1, smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount
-# (check-cluster.sh compares them). Oracle is one instance in both profiles: 4 GiB is the tested K8s default, so
-# PROFILE=laptop needs a 16 GB Docker VM here rather than the 10 GB Postgres profile. The old PG_INSTANCES knob is
-# gone: schemas KC1/KC2 are cheap, the Oracle instance is the unit.
+# (check-cluster.sh compares them). Oracle is one instance in both profiles: 6 GiB for the default 19.3
+# image, 4 GiB for gvenzl Free. PROFILE=laptop is sized for Free only (preflight.sh refuses 19.3 there). Neither
+# profile's peak has been measured on Oracle; the preflight thresholds are estimates. Schemas KC1/KC2 are cheap,
+# the Oracle instance is the unit.
 # laptop k6: fewer logins/s (login VUs = rate x 25) and app VUs; refresh/logout VUs stay (cheap, the gate needs them).
 # NGINX_WORKERS: ingress-nginx defaults to one worker per CPU the node sees (= every host CPU); 2 carry this load.
 PROFILE=${PROFILE:-default}
@@ -165,12 +166,13 @@ oracle_ready() {
 }
 
 # sql_root <sql>: SQL in CDB$ROOT (before the PDB exists). Used only to wait for the PDB to open.
+# NUMWIDTH 20 (here and in sql_admin): the default 10 prints an SCN >= 1e10 as 1.2346E+10, which sql_scalar drops.
 sql_root() {
   local pod; pod=$(oracle_pod)
   [[ -n $pod ]] || die "oracle pod not running"
   printf '%s\n' \
     "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
-    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON" \
+    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON NUMWIDTH 20" \
     "$1" \
     "exit;" \
     | kubectl -n "$NS" exec -i "$pod" -- sqlplus -s / as sysdba
@@ -183,7 +185,7 @@ sql_admin() {
   [[ -n $pod ]] || die "oracle pod not running"
   printf '%s\n' \
     "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
-    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON" \
+    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON NUMWIDTH 20" \
     "ALTER SESSION SET CONTAINER = $DB_SERVICE;" \
     "$1" \
     "exit;" \

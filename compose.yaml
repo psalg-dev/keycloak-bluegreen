@@ -15,7 +15,9 @@ services:
       ORACLE_IMAGE: ${ORACLE_IMAGE:-mohammedesafi/oracle-database:19.3.0-ee}
       ORACLE_PULL_SECRET: ${ORACLE_PULL_SECRET:-}
       ORACLE_PULL_SECRET_FILE: ${ORACLE_PULL_SECRET_FILE:-}
-      ORACLE_SID: ${ORACLE_SID:-ORCLCDB}
+      # empty = scripts/lib/kc.sh picks it from the image (FREE for gvenzl oracle-free, else ORCLCDB). A fixed
+      # default here handed ORCLCDB to the gvenzl image, whose entrypoint and sqlplus follow ORACLE_SID.
+      ORACLE_SID: ${ORACLE_SID:-}
       ORACLE_MEMORY: ${ORACLE_MEMORY:-6Gi}
       ORACLE_STORAGE: ${ORACLE_STORAGE:-20Gi}
     volumes:

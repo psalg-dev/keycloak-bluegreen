@@ -35,7 +35,9 @@ answers (user `admin`, password in `out/jenkins-admin-password`).
 
 ## 3. Run a case
 
-Commit first: Jenkins checks out `file:///repo` at build start, so uncommitted edits do not run.
+Commit first: Jenkins checks out `file:///repo` at build start, so uncommitted edits do not run. The jobs build the
+branch `/repo` had checked out when Jenkins started (`jenkins/jobs.groovy`); after a `git switch`, run
+`docker compose restart jenkins`.
 
 ```bash
 bash scripts/jenkins-build.sh kc-bluegreen CASE=patch      # streams the console; exit 0 = GATE PASS

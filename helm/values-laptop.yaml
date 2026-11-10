@@ -1,5 +1,5 @@
 # PROFILE=laptop overlay, applied last by deploy_color (after values-common.yaml and, for 25.x, values-kc25.yaml).
-# Goal: the whole demo on a 16 GB laptop (Docker VM 8-10 GB). Never set extraEnvVars here: helm replaces lists, so it
+# Goal: the whole demo on a 16 GB laptop (Docker VM ~13 GiB with the gvenzl Free Oracle image; an estimate, not measured). Never set extraEnvVars here: helm replaces lists, so it
 # would drop values-kc25.yaml's list on the major case.
 
 # 2 pods per color on 2 KinD workers (zones a, b): a switch still runs 2 colors side by side, and switch-shared.sh's
@@ -17,7 +17,7 @@ pdb:
 # of the measured 1189 MiB. ponytail: 1Gi is not measured under load; an OOMKilled pod or a restart (replay.sh fails
 # on blue restarts) -> raise to 1280Mi.
 # CPU request 500m, not 1: every KinD node reports all the VM's CPUs, but 4 Keycloak pods x 1 CPU on 2 workers
-# (+ Postgres, k6, legacy IdP) would not schedule on a 4-vCPU Docker VM. No CPU limit, as in default.
+# (+ Oracle, k6, legacy IdP) would not schedule on a 4-vCPU Docker VM. No CPU limit, as in default.
 resources:
   requests: { cpu: 500m, memory: 1Gi }
   limits: { memory: 1Gi }

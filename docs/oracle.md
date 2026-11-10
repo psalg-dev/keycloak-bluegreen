@@ -79,8 +79,9 @@ The lost set is the same as on Postgres: sessions created on blue in
 `[copy_point, switch]`; those users re-login silently through the legacy IdP's SSO. Admin and
 the account console are 503 for the window. Login, token, refresh, logout, discovery and
 JWKS never stop. The gate's `refresh_pre_copy`, `invalid_grant_in_window`, `logout_after_replay`
-and `window_exercised` rules are unchanged, and `db_copy_caught_up` now checks that the
-green copy's SCN is at least the declared copy point.
+and `window_exercised` rules are unchanged. `db_copy_matches_source` checks the copy itself: after the import,
+`switch-lossy.sh` counts users + persisted sessions in the source `AS OF SCN <copy_scn>` and in the copy, aborts on
+a mismatch and records both counts on the `promoted` event for the gate.
 
 ### Why Data Pump and not something else
 
@@ -89,6 +90,8 @@ green copy's SCN is at least the declared copy point.
 | **Data Pump at SCN + replay** | yes (EE/SE2 and Free) | yes, lossy window as above | portable, one instance, uses the demo's existing replay; chosen |
 | Refreshable PDB clone | yes (19c EE, same CDB) | yes, same lossy window | faster copy, but same-CDB/PDB prerequisites and a second PDB (Free allows one); a production optimisation, not the portable default |
 | Oracle Data Guard physical standby | yes (19c EE) | standby is read-only; cannot run green's Liquibase migration | switchover + migration = write freeze; not a blue/green app upgrade tool |
+| Data Guard **snapshot standby** | yes (19c EE, needs a standby + flashback logging) | yes, same lossy window: convert the standby to read-write at the copy point, green migrates it | the closest Oracle analogue of the old replica-promote recipe and no copy time; but green then lives on the standby (convert back = discard green), so it needs a second standby to stay protected |
+| PDB hot clone (non-refreshable) | yes (19c EE, local undo + archivelog) | yes, same lossy window; copy point = clone SCN | block-level copy, faster than Data Pump for a large realm; one PDB per color instead of one schema (Free allows few PDBs) |
 | Debezium Oracle LogMiner → Kafka → green | yes (19c EE, LogMiner) | keeps a *second Oracle* warm at schema N; still migrates at cutover | Kafka/Connect/connector grants and lag; overkill for this DB size; does not remove the migration window |
 | GoldenGate Postgres→Oracle | licensed | yes, CDC with a short cutover | only route for a *live engine migration*; not an app-upgrade copy |
 
@@ -121,7 +124,8 @@ Once on Oracle, the blue/green mechanisms in this branch apply to Keycloak upgra
   `deploy_color` after Helm reports Ready. "Pod Ready" is not proof Keycloak used the schema.
 - `scripts/switch-lossy.sh`: SCN copy point, Data Pump export/import, `copy_ready` and
   `promoted` events carry `scn`; `copy_point` carries `scn`.
-- Gate: `db_copy_caught_up` (new) + the existing lossy rules.
+- Gate: `db_copy_matches_source` (row counts, source AS OF the copy SCN vs the copy) + the existing lossy rules;
+  `sessions_lost` counts every session born in the window, `sessions_lost_observed` the ones k6 came back to.
 - `out/events.jsonl` retains the same event names the report consumes (`copy_point`,
   `promoted`, `migration`, `switch`, `replay*`), so the report and gate do not fork.
 - For production Oracle: AWR/Statspack, `V$SESSION`, `V$SYSTEM_EVENT`, Data Guard broker,
@@ -151,6 +155,10 @@ export ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim
 export ORACLE_MEMORY=4Gi
 docker compose run --rm launcher
 ```
+
+Leave `ORACLE_SID` unset: `scripts/lib/kc.sh` picks `FREE` for an `oracle-free` image. (Between `ab3b167` and this
+fix compose defaulted it to `ORCLCDB`, which the gvenzl entrypoint and `sqlplus` would have followed; the Free run
+below predates that commit and has not been repeated since.)
 
 The Free image starts in a few minutes and passed the same five cases. Give Docker 15 GiB (13 GiB for
 `PROFILE=laptop`, which is Free-sized; 19.3 does not fit the laptop profile).
@@ -188,9 +196,8 @@ docker compose run --rm launcher
 The template sets `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`, and both `ORACLE_PWD` and
 `ORACLE_PASSWORD`; the official image and the gvenzl Free image each read their own name.
 The bootstrap script is mounted at both `/container-entrypoint-initdb.d` (gvenzl) and
-`/opt/oracle/scripts/setup` (official). `ORACLE_IMAGE` also selects the SID if you use a
-different image name; set `ORACLE_SID` explicitly if the image does not contain
-`oracle-free`/`oracle-xe` but is not a CDB with `ORCLCDB`.
+`/opt/oracle/scripts/setup` (official). `ORACLE_IMAGE` also selects the SID: `FREE` when the image name contains
+`oracle-free`, else `ORCLCDB`; set `ORACLE_SID` explicitly for anything else (e.g. an XE image).
 
 ## Validation done on this branch (2026-11-04/05)
 
@@ -208,7 +215,8 @@ Image: `mohammedesafi/oracle-database:19.3.0-ee` — a community build of Oracle
 Developer License, not an Oracle-supported production image. Env: `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`,
 `ORACLE_MEMORY=6Gi`. First DB creation took ~15-20 min; the startup probe and `oracle_ready` allow 30 min. The report
 is `out/oracle19c-run/report.html` (gitignored; Jenkins archives it). Headline: 0 5xx in every case; `minor` 3
-sessions lost with 3 silent re-logins; `major` 5/5; both Data Pump copies caught up to the declared SCN; changesets
+sessions lost with 3 silent re-logins; `major` 5/5 (the sessions k6 came back to; 320 and 354 sessions were born in the window and are not in the copy,
+see README Results); changesets
 211 -> 238 (minor) and 134 -> 238 (major).
 
 The **gvenzl Oracle Free** path also passed all five cases (Jenkins builds #2/#4/#6/#7/#9, report
@@ -263,6 +271,13 @@ RMAN/PITR, and a refreshable-PDB path. The `helm template` render was checked fo
   7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` was OOMKilled at 2 and 3 GiB.
 - **Laptop profile**: still 2 workers/2 pods, sized for gvenzl Free (13 GiB Docker VM). The 19.3 image does not fit
   that profile; use the default profile on a machine with ~16 GB+ for Docker.
-- **No measured Oracle results yet.** The README's Results table is the Postgres baseline
-  from `main`; do not quote it as Oracle numbers. Run the five cases on this branch to
-  produce the Oracle table.
+- **Not measured on Oracle**: memory (both runs were on a 47 GiB Docker VM without sampling; the preflight
+  thresholds are estimates) and the row-count copy check (added after the runs). The README's Results table is the
+  19.3 run.
+- **Undo retention** is set in CDB$ROOT and again inside the PDB (`k8s/oracle/bootstrap.sh`): from RU 19.9 a PDB
+  does not inherit it. The bootstrap runs once, at database creation; an existing cluster keeps its old setting.
+- **Optimizer statistics**: the import excludes them (19c fails on three function-based index statistics), so the
+  copy runs on dynamic sampling until Oracle's nightly job; a production copy should run
+  `DBMS_STATS.GATHER_SCHEMA_STATS` before the flip.
+- **Data Pump credentials**: `expdp`/`impdp` get `system/<password>` on their command line inside the Oracle pod
+  (visible in its process list); production: a parfile or an Oracle wallet.

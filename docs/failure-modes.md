@@ -67,9 +67,9 @@ colors, Oracle and the legacy IdP compete for the same CPUs, so latency numbers 
 absolute capacity numbers. Synthetic load at a fixed, modest rate (~2 logins/s): rare races need far more traffic to
 show up. One run per case: a count of 0 is "not seen in this run", not a probability; compare rates across runs before
 calling something fixed. No real network between zones, no cloud load balancer: the flip is a Service selector change
-seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results) **on Postgres**;
-this branch has not recorded an Oracle run yet. Oracle copy instrumentation: `copy_point.scn` and `promoted.scn` in
-`events.jsonl`, checked by the `db_copy_caught_up` gate rule. Report tabs built from generated data are marked SYNTHETIC.
+seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results) **on Postgres** and on 2026-11-04 on
+Oracle 19.3 (`README.md` Results). Oracle copy instrumentation: `promoted.src_rows` / `copy_rows` in `events.jsonl`
+(users + sessions, source AS OF the copy SCN vs the copy), checked by the `db_copy_matches_source` gate rule. Report tabs built from generated data are marked SYNTHETIC.
 
 ## Reading a mode
 
@@ -168,8 +168,10 @@ that every rule a mode names has the same state as the gate.txt row, and that ov
   [`copy_point`, `switch`] and lost before `rollback` + 1 s, or born in (`switch`, `rollback`) and lost after it.
 - **Enforced**: gate `no_invalid_grant` (shared), `invalid_grant_in_window` / `invalid_grant_phases` + `relogin_ok`
   (lossy), the `invalid_grant` part of the `refresh_*` session rules and of `app_refresh_ok`. The lossy numbers
-  `sessions_lost`, `relogins` are reported.
-- **Blind spots**: k6 drops a lost token after the first `invalid_grant`, so each lost session counts once; offline
+  `sessions_lost` (every session born in the window), `sessions_lost_observed`, `relogins` are reported.
+- **Blind spots**: k6 comes back to ~10 sessions only (refresh VUs; the `login` scenario never refreshes), so this
+  mode's count and "users impacted" are a sample: the loss itself is every session born in the window
+  (`sessions_lost`, about a third of the users of a run). k6 drops a lost token after the first `invalid_grant`, so each lost session counts once; offline
   tokens are not exercised; `window_sessions_back` (window sessions refreshing after a rollback) is structurally ~0.
 
 ### `refresh_other_error`

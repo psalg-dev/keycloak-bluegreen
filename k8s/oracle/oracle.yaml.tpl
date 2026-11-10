@@ -1,8 +1,7 @@
 # One Oracle instance for the demo. The blue/green "databases" are schemas in FREEPDB1, created by
 # scripts/lib/kc.sh create_db; the instance is the platform, like the CNPG operator was.
-# 19.3 target: set ORACLE_IMAGE=container-registry.oracle.com/database/enterprise:19.3.0.0 and
-# ORACLE_PULL_SECRET=<docker-registry secret>. The default is 23ai Free because 19c has no free XE image
-# and the 19.3 EE image needs an Oracle SSO login; the SQL and cutover path are the same.
+# Image: ORACLE_IMAGE (scripts/lib/kc.sh; default = the Docker Hub 19.3 EE community build; alternatives: gvenzl Free,
+# or the official registry image with ORACLE_PULL_SECRET; docs/oracle.md). The SQL and cutover path are the same.
 apiVersion: v1
 kind: Service
 metadata:
@@ -11,6 +10,9 @@ metadata:
   labels: { app: oracle }
 spec:
   clusterIP: None
+  # The only DB instance: a readiness probe that times out under Data Pump load (sqlplus exec, 1 CPU) must not remove
+  # the one DNS record both colors connect to. Liveness still restarts a dead instance.
+  publishNotReadyAddresses: true
   selector: { app: oracle }
   ports:
     - name: listener

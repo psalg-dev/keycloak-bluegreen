@@ -495,6 +495,9 @@ fixtures and `gate.sh` (no cluster) can run in parallel with 2 and 3. Slice 7's 
 - Replay reads the demo-replay listener's lines from blue's stdout. A crash between commit and println, log rotation
   or a lost node drops lines silently; a container restart or pod recreation inside the window is detected and fails
   the replay, nothing else is. Production: a transactional outbox (same DB transaction) shipped to the new DB.
+- Admin events are not replayed (`ReplayEventListener.onEvent(AdminEvent)` is a no-op): an admin-API logout, user
+  delete or role change that reaches blue in the window (the edge is frozen, so only through blue's own Service) is
+  lost. Replayed users carry the realm roles and groups they had at creation, nothing granted later.
 - After the second replay, blue still runs (drain; `KEEP_OLD` for the rollback hold). Writes that reach it then (only
   pods labelled `kc-blue-keycloak-client=true` can, through blue's own Service) are not replayed.
 - Rollback to the old DB: green's session expiry/cleanup is not reverse-replayed, so sessions blue still holds can work

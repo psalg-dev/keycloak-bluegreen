@@ -16,7 +16,9 @@ import org.keycloak.events.admin.AdminEvent;
 import org.keycloak.models.AbstractKeycloakTransaction;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
+import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.models.utils.ModelToRepresentation;
 
 /**
  * Writes one stdout line {"replay":true,...} per write that a lossy switch must replay onto the new color:
@@ -67,6 +69,10 @@ public class ReplayEventListener implements EventListenerProvider {
         line.put("firstName", user.getFirstName());
         line.put("lastName", user.getLastName());
         line.put("attributes", attributes);
+        // what the user was GRANTED at creation (default role, IdP-mapper roles/groups): partialImport on the other
+        // color applies exactly what the representation lists, so without these the replayed user differs in realm_access
+        line.put("realmRoles", user.getRealmRoleMappingsStream().map(RoleModel::getName).toList());
+        line.put("groups", user.getGroupsStream().map(ModelToRepresentation::buildGroupPath).toList());
         line.put("federatedIdentities", session.users().getFederatedIdentitiesStream(realm, user)
                 .map(f -> {
                     // not Map.of: a null userName would throw and EventBuilder would swallow the whole line

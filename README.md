@@ -133,7 +133,7 @@ numbers are comparable within a run, not across profiles.
 - **Gate** (`scripts/gate.sh`, rules explained in `scripts/gate/why.tsv`, printed under each row): no 5xx; issuer
   stable per network; same `sub` per user across versions; in-flight logins and refresh tokens survive (patch);
   pre-copy sessions survive and only window-born sessions are lost, each followed by a successful re-login (lossy);
-  the Oracle copy's SCN is at least the declared copy point (`db_copy_caught_up`); logged-out sessions never come back
+  the Oracle copy holds exactly the users and sessions the source had at the copy SCN (`db_copy_matches_source`); logged-out sessions never come back
   after the replay; the app rules (introspection, JWT, refresh, back-/front-channel logout delivered, logout effective);
   and that load really ran through the cutover (`load_through_cutover`) and the lossy window really was exercised
   (`window_exercised`), so no rule can pass on silence.
@@ -160,7 +160,8 @@ The gvenzl Oracle Free image is the fast alternative and also passed all five ca
 | error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.27 % (0.60 %) | 0.49 % (0.97 %) | 0.25 % (0.47 %) |
 | users potentially impacted (of users seen) | 4 of 890 (slow only) | 2 of 945 (slow only) | 31 of 871 (3.6 %) | 63 of 1,185 (5.3 %) | 28 of 875 (3.2 %) |
 | lossy window (copy point -> switch) | - | - | 147.5 s | 124.4 s | 153.4 s |
-| sessions lost = silent re-logins | 0 | 0 | 3 | 6 (+4 green-born, at the rollback) | 5 |
+| sessions lost (born on the old color in the window, not in the copy) | 0 | 0 | 320 (313 users) | 291 (284 users), +377 green-born (364 users) at the rollback | 354 (345 users) |
+| of those, seen lost by k6 = silent re-logins | 0 | 0 | 3 | 6 (+4 green-born, at the rollback) | 5 |
 | logouts / new users replayed | - | - | 20 / 61 | 18 / 49 forward, 19 / 66 back | 22 / 74 |
 | users repaired (post-flip race) | - | - | 0 | 0 | 0 |
 | resurrection window (switch -> replay done) | - | - | 46.5 s | 40.9 s, rollback 42.4 s | 47.4 s |
@@ -177,6 +178,13 @@ Reading it:
   channel logout for a session Keycloak no longer had) or a request over 1 s. The shared cases: four slow-only users
   in `patch`, two in `patch-rollback`, no errors. The report counts each user once; the definition is in
   [docs/failure-modes.md](docs/failure-modes.md).
+- **"Impacted" is what k6 saw, not the exposure.** k6 comes back to about ten sessions (its refresh VUs); the 2
+  logins/s of the `login` scenario log in and never refresh. Every session created on blue between the copy point
+  and the flip is missing on green: 320 sessions / 313 users in `minor`, 354 / 345 in `major`, 291 / 284 in
+  `minor-rollback` plus 377 / 364 created on green and dropped by the rollback. That is roughly a third of the users
+  seen in a run, and each of them re-logins (silently, through legacy SSO) the next time they return. The 3-6
+  "seen lost" are the sample the gate judges, recomputed from the archived k6 lines with the current gate
+  (`sessions_lost`, `sessions_lost_observed`, `green_sessions_born`).
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
   the flip (started on blue, finished on green; the next attempt goes through legacy SSO), refreshes of sessions born
   in the lossy window (`invalid_grant`, then a silent re-login), and the apps' back-/front-channel logouts for those
@@ -187,8 +195,9 @@ Reading it:
   run-to-run spread of that size.
 - Admin and account console answer 503 for the whole cutover window in the lossy cases (copy point -> window end,
   ~125-155 s). Login, token, refresh, logout, discovery and JWKS never stop.
-- The Data Pump copy is visible in the report: `copy_point`/`promoted` carry the same SCN, and every green schema
-  ends at the target Keycloak changeset count (238). The Oracle instance is one 6 GiB pod; no Oracle memory sample was
+- The Data Pump copy: every green schema ends at the target Keycloak changeset count (238). These runs predate the
+  row-count check (`db_copy_matches_source`: source AS OF the copy SCN vs the copy); their events only restate the
+  SCN, so that rule has not passed on a live run yet. The Oracle instance is one 6 GiB pod; no Oracle memory sample was
   taken in this five-case run.
 
 The full numbers, per failure mode and per step class, are in the report (one tab per case).

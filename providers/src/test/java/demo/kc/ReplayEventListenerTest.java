@@ -19,6 +19,7 @@ import org.keycloak.models.KeycloakTransaction;
 import org.keycloak.models.KeycloakTransactionManager;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.RealmProvider;
+import org.keycloak.models.RoleModel;
 import org.keycloak.models.UserModel;
 import org.keycloak.models.UserProvider;
 import org.keycloak.util.JsonSerialization;
@@ -98,6 +99,9 @@ class ReplayEventListenerTest {
         when(user.getFirstName()).thenReturn("User");
         when(user.getLastName()).thenReturn("4500");
         when(user.getAttributes()).thenReturn(Map.of("tenant", List.of("t0"), "username", List.of("user4500")));
+        RoleModel role = mock(RoleModel.class);
+        when(role.getName()).thenReturn("default-roles-demo");
+        when(user.getRealmRoleMappingsStream()).thenReturn(Stream.of(role));
         UserProvider users = mock(UserProvider.class);
         when(session.users()).thenReturn(users);
         when(users.getUserById(realm, "u1")).thenReturn(user);
@@ -121,6 +125,8 @@ class ReplayEventListenerTest {
         assertEquals("User", j.get("firstName"), "replayed users keep their names (dropped before)");
         assertEquals("4500", j.get("lastName"));
         assertEquals(Map.of("tenant", List.of("t0")), j.get("attributes"), "root attrs (username, ...) stripped");
+        assertEquals(List.of("default-roles-demo"), j.get("realmRoles"), "roles granted at creation travel with the user");
+        assertEquals(List.of(), j.get("groups"));
         assertEquals(List.of(Map.of("identityProvider", "legacy-net1", "userId", "user4500", "userName", "user4500")),
                 j.get("federatedIdentities"));
     }

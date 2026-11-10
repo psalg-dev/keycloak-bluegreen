@@ -184,7 +184,10 @@ def cls:
     {k: "cutover window(s)", v: ([$W[] | "\(.[0] | rel) .. \(.[1] | rel) s"] | join(", ") | if . == "" then "none (no switch)" else . end)},
     (if $base == "lossy" then
       {k: "lossy window: copy_point -> switch", v: (if $cp and $sw then "\($sw - $cp | r(10)) s" else "n/a" end)},
-      {k: "sessions lost (refresh invalid_grant, distinct)", v: ([$L[] | select(.step == "refresh" and .error == "invalid_grant") | .login_id] | unique | length)},
+      {k: "sessions lost (born on the old color in [copy_point, flip]: not in the copy)", v: (if $cp and $sw then
+        ([$L[] | select((.step == "login_token" or .step == "app_login_callback") and .status < 400 and .status != 0 and .te >= $cp and .te <= $swe)]
+         | "\(length) sessions, \(map(.user) | unique | length) users") else "n/a" end)},
+      {k: "of those, seen lost by k6 (refresh invalid_grant, distinct; k6 comes back to ~10 sessions only)", v: ([$L[] | select(.step == "refresh" and .error == "invalid_grant") | .login_id] | unique | length)},
       {k: "silent re-logins", v: ([$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200)] | length)},
       {k: "logouts replayed (forward)", v: ([$fwd[] | .logouts // empty | tonumber] | max // "n/a")},
       {k: "user creations replayed (forward)", v: ([$fwd[] | .users // empty | tonumber] | max // "n/a")},

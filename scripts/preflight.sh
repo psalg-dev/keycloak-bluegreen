@@ -22,9 +22,12 @@ else
   bad "no Docker daemon: start Docker Desktop (or dockerd) and re-run"
 fi
 
-# 2. Docker VM memory against the profile's measured peak (default 14.8 GiB with Jenkins, laptop 9.1 GiB on
-# Postgres). Oracle 19.3 adds a 6 GiB instance and removes the CNPG instances; the Oracle branch needs ~15 GiB default
-# and ~13 GiB laptop.
+# 2. Docker VM memory. ESTIMATES, not measurements: the measured peaks are the Postgres ones (default 14.8 GiB with
+# Jenkins, laptop 9.1 GiB). Oracle swaps the CNPG instances for one 6 GiB (19.3) or 4 GiB (Free) instance, and the
+# Oracle runs so far were on a 47 GiB VM without memory sampling. ~15 GiB default, ~13 GiB laptop (Free only).
+if [[ $PROFILE == laptop && $ORACLE_IMAGE != *oracle-free* ]]; then
+  bad "PROFILE=laptop is sized for the gvenzl Free image (4 GiB), not $ORACLE_IMAGE: set ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim ORACLE_MEMORY=4Gi (docs/oracle.md) or use the default profile"
+fi
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
 need=$([[ ${PROFILE} == laptop ]] && echo 13 || echo 15) # GiB
 if ((mem > 0)); then

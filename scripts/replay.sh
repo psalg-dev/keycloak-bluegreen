@@ -3,7 +3,8 @@
 # demo-replay event listener's stdout lines on every <from> pod, onto <to> (straight to its Service, so it works
 # before the switch). Idempotent: run it twice, and start the window early on purpose.
 #   LOGOUT       -> delete that session (404 = it never reached <to>'s DB: fine)
-#   REGISTER     -> recreate the brokered user with the SAME id (else `sub` changes for that person)
+#   REGISTER     -> recreate the brokered user with the SAME id (else `sub` changes for that person), with the realm
+#                   roles and groups it was granted at creation (lines of an older provider jar carry none: `// []`)
 #   REVOKE_GRANT -> 26: delete that session; 25 (no sessionId): log the user out everywhere (conservative superset)
 # Auto-links (second federated link of an existing user) are NOT replayed: the next login on <to> redoes them.
 set -euo pipefail
@@ -32,7 +33,7 @@ apply() {
 
 import_user() { # replay line -> partialImport of that user with its original id (SKIP if the id or username exists)
   jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled: true, emailVerified: true,
-       attributes, federatedIdentities}]}' <<<"$1" \
+       attributes, federatedIdentities, realmRoles: (.realmRoles // []), groups: (.groups // [])}]}' <<<"$1" \
     | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$1")"
 }
 has_user() { [[ $(admin_api GET "/realms/demo/users/$1" -o /dev/null -w '%{http_code}' || true) == 200 ]]; }

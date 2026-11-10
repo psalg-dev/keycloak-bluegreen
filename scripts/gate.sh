@@ -156,11 +156,12 @@ rule refresh_green_after_rollback r_refresh_green_after_rollback
 # shellcheck disable=SC2016
 [[ $base != lossy ]] || {
 rule refresh_pre_copy r_refresh_pre_copy
-rule db_copy_caught_up '([$e[] | select(.event == "copy_point")][0]) as $cp
-  | ([$e[] | select(.event == "promoted")][0]) as $pr
-  | if $cp == null or $pr == null then skip("needs copy_point + promoted")
-    elif ($cp.scn // "") == "" or ($pr.scn // "") == "" then verdict(false; "copy_point or promoted has no SCN")
-    else verdict((try (($pr.scn | tonumber) >= ($cp.scn | tonumber)) catch false); "copy_point SCN \($cp.scn), green ready at SCN \($pr.scn)") end'
+# Measured by switch-lossy.sh after the import: user + session rows of the source AS OF the copy SCN vs the copy.
+# (The old db_copy_caught_up compared the copy SCN with itself: both events carried the same shell variable.)
+rule db_copy_matches_source '([$e[] | select(.event == "promoted")][0]) as $pr
+  | if $pr == null then skip("needs promoted")
+    elif ($pr.src_rows // "") == "" or ($pr.copy_rows // "") == "" then verdict(false; "promoted has no row counts (source AS OF SCN \($pr.scn // "?") vs copy): the copy is unproven")
+    else verdict($pr.src_rows == $pr.copy_rows; "source had \($pr.src_rows) user+session rows at SCN \($pr.scn // "?"), the copy has \($pr.copy_rows)") end'
 if [[ $mode == lossy ]]; then
 rule invalid_grant_in_window r_invalid_grant_in_window
 rule logout_after_replay r_logout_after_replay
@@ -177,7 +178,13 @@ rule window_exercised 'ev("promoted") as $pr | if $pr == null or $sw == null the
 rule relogin_ok r_relogin_ok
 # reported, not gated (forward replay counts only: reverse ones have from = the switch target)
 rule lossy_seconds 'info(if $cp and $sw then $sw - $cp else null end | secs)'
-rule sessions_lost 'info([$L[] | select(.step == "refresh" and ig) | .login_id] | unique | n)'
+# sessions_lost = every session born on the old color in [copy_point, flip]: none of them is in the copy. k6 holds only
+# a few of them (refresh VUs); the login scenario logs in and never comes back, a real user does. sessions_lost_observed
+# = the ones k6 then refreshed and saw die. Reporting only the observed ones understated the loss ~100x (review 2026-11-10).
+rule sessions_lost 'info(if $cp == null or $sw == null then "n/a" else
+  [$L[] | select((.step == "login_token" or .step == "app_login_callback") and .status < 400 and .status != 0 and .te >= $cp and .te <= $swe)] as $w
+  | "\($w | n) born in [copy_point, flip] (\($w | map(.user) | unique | n) users; \([$w[] | select(.step == "app_login_callback")] | n) of them app sessions)" end)'
+rule sessions_lost_observed 'info([$L[] | select(.step == "refresh" and ig) | .login_id] | unique | n)'
 rule relogins 'info([$L[] | select(.scenario == "relogin" and .step == "login_token" and .status == 200)] | n)'
 rule logouts_replayed 'info([$e[] | select((.event | startswith("replay")) and ($new == null or .from != $new)) | .logouts // empty | tonumber] | max // "n/a")'
 rule users_replayed 'info([$e[] | select((.event | startswith("replay")) and ($new == null or .from != $new)) | .users // empty | tonumber] | max // "n/a")'
@@ -190,6 +197,7 @@ rule refresh_pre_copy_after_rollback r_refresh_pre_copy_after_rollback
 rule logout_after_rollback_replay r_logout_after_rollback_replay
 # Users first seen on green whose creation the reverse replay must have kept (same id = same sub) on blue.
 rule green_users_sub_kept r_green_users_sub_kept
+rule green_sessions_born 'info(if $sw and $rb then [$L[] | select(.step == "login_token" and .status == 200 and .te > $swe and .te < $rbe)] | "\(n) born on the new color in (flip, rollback flip): all lost by the rollback (\(map(.user) | unique | n) users)" else "n/a" end)'
 rule green_sessions_lost 'info(if $sw and $rb then [$L[] | select(.step == "refresh" and ig and ((born // -1) as $t | $t > $sw and $t < $rb)) | .login_id] | unique | n else "n/a" end)'
 rule window_sessions_back 'if $cp == null or $sw == null or $rb == null then skip("needs copy_point + switch + rollback") else
   [$L[] | select(.step == "refresh" and .status == 200 and .ts >= $rbe + $grace and ((born // -1) as $t | $t >= $cp and $t <= $swe))] as $b

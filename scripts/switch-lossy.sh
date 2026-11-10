@@ -49,8 +49,19 @@ log "importing into $new_schema (REMAP_SCHEMA $src_schema:$new_schema)"
 kubectl -n "$NS" exec "$oracle_pod_name" -- impdp "system/$admin_pw@//localhost:1521/$DB_SERVICE" \
   "SCHEMAS=$src_schema" "REMAP_SCHEMA=$src_schema:$new_schema" "DIRECTORY=KC_DUMP" "DUMPFILE=$dump" \
   "LOGFILE=$dplog" EXCLUDE=USER EXCLUDE=STATISTICS >/dev/null || die "impdp into $new_schema failed (see $dplog in the Oracle pod)"
+# Proof that the copy IS the source at the copy point, measured, not restated: users + persisted sessions (the two
+# tables blue keeps writing) in the source AS OF the copy SCN against the copy now. The source's CURRENT count has
+# moved on, so an export that ignored FLASHBACK_SCN or an import that dropped rows shows up here.
+# ponytail: two tables, counts only; DBMS_COMPARISON / per-table hashes if a production copy needs more.
+rows="(SELECT COUNT(*) FROM %s.USER_ENTITY%s) + (SELECT COUNT(*) FROM %s.OFFLINE_USER_SESSION%s)"
+# shellcheck disable=SC2059 # $rows is the format
+src_rows=$(sql_scalar "$src" "SELECT $(printf "$rows" "$src_schema" " AS OF SCN $copy_scn" "$src_schema" " AS OF SCN $copy_scn") FROM dual")
+# shellcheck disable=SC2059
+copy_rows=$(sql_scalar "$new" "SELECT $(printf "$rows" "$new_schema" "" "$new_schema" "") FROM dual")
 event copy_ready db="$new" scn="$copy_scn"
-event promoted db="$new" scn="$copy_scn" # gate: the lossy window really had a copy to lose sessions against
+event promoted db="$new" scn="$copy_scn" src_rows="$src_rows" copy_rows="$copy_rows" # gate: db_copy_matches_source, window_exercised
+[[ -n $src_rows && $src_rows == "$copy_rows" ]] \
+  || die "copy $new_schema has ${copy_rows:-no} user+session rows, $src_schema had ${src_rows:-none} at SCN $copy_scn: not a copy of the copy point"
 
 # 6. Green on its own schema: the new version migrates it. Same copy point; the changelog count proves migration ran.
 before=$(sql_scalar "$new" "SELECT COUNT(*) FROM DATABASECHANGELOG")

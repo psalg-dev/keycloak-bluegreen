@@ -23,13 +23,15 @@ logout_after_rollback_replay	logouts done on the new version are reverse-replaye
 green_users_sub_kept	users created on the new version must keep their sub when we roll back, or they come back as a different identity
 rollback_seconds	how long a rollback takes from decision to flip: the time users are exposed to a bad release after we notice
 lossy_seconds	length of the window in which new sessions on the old version will be lost: the blast radius of a lossy upgrade
-sessions_lost	how many users had to re-login because of the upgrade (silent via SSO here; visible if the IdP session had expired)
+sessions_lost	every session created on the old version after the copy point is missing on the new one: each of those users must re-login the next time they come back (silent via SSO here; visible if the IdP session had expired)
+sessions_lost_observed	the lost sessions k6 itself came back to (it holds only ~10 sessions; its login scenario never refreshes): the sample the lossy rules judge, NOT the size of the loss
 relogins	how many silent re-logins the lost sessions caused: extra load on Keycloak and the legacy IdP right after the cutover
 logouts_replayed	logouts carried over from the old version; each one would otherwise be a resurrected session
 users_repaired	users who logged in on the new color between the flip and the replay, so it created them twice; the replay restored the original id, but their sub differed for seconds (a downstream app may have seen a stranger)
 users_replayed	users first created on the old version during the window; each one would otherwise get a new sub on the new version
 resurrection_seconds	time during which a logout made on the old version could still be undone on the new one: the security exposure window
-green_sessions_lost	sessions created on the new version that a lossy rollback throws away (users re-login once)
+green_sessions_born	every session created on the new version before a lossy rollback is thrown away with it: the rollback's real session loss
+green_sessions_lost	observed sample of the above: sessions created on the new version that a lossy rollback throws away (users re-login once)
 relogins_after_rollback	silent re-logins caused by the rollback
 reverse_logouts_replayed	logouts from the new version carried back onto the old one by the rollback
 reverse_users_replayed	users created on the new version, recreated on the old one with the same id by the rollback
@@ -51,4 +53,4 @@ latency_app_call_introspect	end-to-end latency of an app's API call validated by
 latency_introspection	Keycloak's introspection latency as the resource server sees it: the direct cost of the cutover on every introspecting API
 latency_regression	step classes whose p95 during the cutover is more than twice their pre-switch p95: where users feel the deployment even without errors
 window_exercised	proves the lossy window really happened: a session made on the old version after the copy is unknown to the new one (else the lossy rules passed on no data, or the new DB saw writes it should not)
-db_copy_caught_up	the green copy must be at least as new as the declared copy point; if it is older, the window bound is a guess and sessions/logouts outside it are lost silently
+db_copy_matches_source	the copy must hold exactly the users and sessions the source had at the copy SCN (counted on both sides after the import); if it does not, the window bound is a guess and sessions/logouts outside it are lost silently
