@@ -26,7 +26,8 @@ docker compose up -d jenkins
 
 `up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, one Oracle instance
 (6 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
-`PROFILE=laptop` on every command; the laptop profile is sized for gvenzl Free (13 GiB Docker VM), not 19.3. For the
+`PROFILE=laptop` on every command, plus `ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim ORACLE_MEMORY=4Gi` on the
+bring-up: the laptop profile is sized for gvenzl Free (~13 GiB Docker VM, an estimate) and preflight refuses 19.3 there. For the
 smaller gvenzl Free image instead of the default 19.3, see `docs/oracle.md` (`ORACLE_IMAGE`,
 `ORACLE_PULL_SECRET_FILE`).
 

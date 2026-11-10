@@ -14,9 +14,11 @@ WHENEVER SQLERROR EXIT SQL.SQLCODE
 SET FEEDBACK OFF
 ALTER SYSTEM SET undo_retention = 10800 SCOPE = BOTH;
 ALTER SESSION SET CONTAINER = ${pdb};
--- again inside the PDB: from RU 19.9 (and on 23.x) a PDB does not inherit undo_retention from CDB\$ROOT
-ALTER SYSTEM SET undo_retention = 10800 SCOPE = BOTH;
 CREATE OR REPLACE DIRECTORY KC_DUMP AS '/opt/oracle/oradata/dpdump';
 GRANT READ, WRITE ON DIRECTORY KC_DUMP TO SYSTEM;
+-- undo_retention again inside the PDB: from RU 19.9 (and on 23.x) a PDB does not inherit it from CDB\$ROOT.
+-- Last and non-fatal: this script runs once, and the Data Pump directory above must exist whatever happens here.
+WHENEVER SQLERROR CONTINUE
+ALTER SYSTEM SET undo_retention = 10800 SCOPE = BOTH;
 exit;
 SQL

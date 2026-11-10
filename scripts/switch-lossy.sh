@@ -23,7 +23,9 @@ build_image "$target" 1
 
 # 2. Freeze only what must not be lost and isn't replayed: admin + account console.
 freeze
-trap 'unfreeze >/dev/null 2>&1 || true' ERR # a failed copy must not leave admin/account 503
+# EXIT, not ERR: `die` exits without raising ERR, so an `|| die` below (expdp, impdp, the row check) left the paths
+# frozen; and ERR stays kc.sh's trap, which logs the failing command.
+trap 'unfreeze >/dev/null 2>&1 || true' EXIT # a failed copy must not leave admin/account 503
 event window_start
 
 # 3. Copy point: the SCN the export reads. Blue keeps writing; logouts/creations after this time are replayed.
@@ -89,7 +91,7 @@ event replay_done
 # 11. Unfreeze. 12. KEEP_OLD=true: old color + old schema stay up for scripts/rollback.sh (it reverse-replays green's
 #     logouts/creations and flips back). Otherwise the old color is scaled down; its schema stays as a last-resort copy.
 unfreeze
-trap - ERR
+trap - EXIT
 event window_end
 if [[ ${KEEP_OLD:-false} == true ]]; then
   log "switched $active -> $idle ($src -> $new); kc-$active on schema $src kept running for rollback"; exit 0

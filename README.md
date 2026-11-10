@@ -108,7 +108,7 @@ Tear down: `bash scripts/down.sh`, then `docker compose down -v`.
 ### On a 16 GB laptop
 
 ```bash
-PROFILE=laptop docker compose run --rm launcher
+PROFILE=laptop ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim ORACLE_MEMORY=4Gi docker compose run --rm launcher
 ```
 
 Then run cases with `PROFILE=laptop` (Jenkins build parameter, or
@@ -182,7 +182,8 @@ Reading it:
   logins/s of the `login` scenario log in and never refresh. Every session created on blue between the copy point
   and the flip is missing on green: 320 sessions / 313 users in `minor`, 354 / 345 in `major`, 291 / 284 in
   `minor-rollback` plus 377 / 364 created on green and dropped by the rollback. That is roughly a third of the users
-  seen in a run, and each of them re-logins (silently, through legacy SSO) the next time they return. The 3-6
+  seen in a run, and each of them re-logins (silently, through legacy SSO) the next time they return (k6 itself logged a few of
+  them out again: 14 logout-scenario and 4 app sessions of the 320 in `minor`). The 3-6
   "seen lost" are the sample the gate judges, recomputed from the archived k6 lines with the current gate
   (`sessions_lost`, `sessions_lost_observed`, `green_sessions_born`).
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle

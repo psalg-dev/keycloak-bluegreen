@@ -78,6 +78,11 @@ app-lossy-rb-miss  |lossy-rollback|lossy-rb-base app-lossy-rb               |los
 '
 
 bad=0
+# sessions_lost counts every session born in the window (2 in lossy-base), not just the 1 k6 saw die
+out=$(scripts/gate.sh lossy "$F/lossy-base.k6.jsonl" "$F/lossy.events.jsonl" 2>&1) || true
+if grep -Eq '^sessions_lost +INFO +2 born' <<<"$out" && grep -Eq '^sessions_lost_observed +INFO +1$' <<<"$out"; then
+  log "ok   sessions_lost (2 born in the window, 1 observed)"
+else bad=$((bad + 1)); log "FAIL sessions_lost: want '2 born' and observed 1"; grep '^sessions_lost' <<<"$out" >&2 || true; fi
 while IFS='|' read -r name mode frags events want expect; do
   [[ -n $name ]] || continue
   read -r name <<<"$name"; read -r mode <<<"$mode"; read -r events <<<"$events"
