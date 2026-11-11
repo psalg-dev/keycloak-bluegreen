@@ -160,7 +160,8 @@ the mechanism, engine-independent, and needs a post-flip duplicate followed by a
 
 Builds **#16** (`patch`), **#17** (`minor`), **#18** (`major`), **#19** (`patch-rollback`), **#20** (`minor-rollback`),
 all on `f159cbe` (the final code, all three fixes in): a second run of the day on a fresh cluster. The first run
-(builds #1-#8, before the k6 and replay fixes) passed the same gates with the same picture.
+(passing builds #1, #4, #6, #7, #8, before the k6 and replay fixes) passed the same gates; its lossy windows were
+119-170 s and its lossy rollback took 65.5 s, which is the run-to-run spread to expect.
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
 |---|---|---|---|---|---|
