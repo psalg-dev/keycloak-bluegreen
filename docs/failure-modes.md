@@ -250,9 +250,10 @@ that every rule a mode names has the same state as the gate.txt row, and that ov
 - **Enforced**: gate `logout_probe_never_ok` (shared), `logout_after_replay` (+ `logout_after_rollback_replay`) for
   probes after the replay, `logout_effective` for the app (`/me` 401, no successful call after the logout). Lossy
   probes with 200 before the switch are judged by no rule (report only).
-- **Blind spots**: replay reads Keycloak's stdout (`replay.sh`): a log line lost to rotation or a recreated pod is a
-  silently lost logout (`docs/production-readiness.md` recommends an outbox table). 1 s grace for a stale cache.
-  Only ~4 logouts per lossy window at the current rate.
+- **Blind spots**: 1 s grace for a stale cache. The replay reads the old color's DB (`replay.sh`, since 2026-11-11;
+  before, pod stdout); k6 gives it only 3-4 copied sessions to end per lossy window and none on a rollback, so the
+  logout rules pass mostly on sessions the new color never had (`docs/production-readiness.md` 2.3 has the planted
+  check that covers the rest).
 
 ### `backchannel_missing`
 - **Definition**: a logout of a `bc` session without a matching ok back-channel logout at the app within 10 s, or

@@ -18,9 +18,10 @@ auth server, `hostname-strict=false` behind several ingresses.
 - The replay source: `kubectl logs` of pod stdout (`scripts/replay.sh:16-20`).
 
 **Biggest gaps (ranked)**
-1. **The replay source is not durable.** There are three silent loss paths: kubelet log rotation, pod
-   *replacement* (not restart), and a crash between commit and `println`. A swallowed error in `replay.sh` makes a
-   failed logout replay count as done (section 2.3). This is the one blocker the live runs did not remove.
+1. **The replay source: fixed on Postgres, open on Oracle (2026-11-11).** The replay used to read the event
+   listener's lines from pod stdout (silent loss: log rotation, a crash between commit and `println`). It now reads the
+   old color's database and diffs it against the new one (`scripts/replay.sh`, section 2.3). Verified live on Postgres
+   only; the Oracle `db_rows` is written, not run.
 2. **The DB is the single point of the design** and is under-specified for production. The demo has no backups or
    PITR. The `stateless` requirements apply: synchronous HA replication, commit latency under 10 ms, roughly 2x DB
    load. The replica-and-promote step must be re-engineered for a managed DB (section 4).
@@ -39,7 +40,7 @@ auth server, `hostname-strict=false` behind several ingresses.
 | Mechanism | Verdict | Evidence | Condition to flip to GO |
 |---|---|---|---|
 | Shared-DB switch (patch) | **GO for staging; GO for prod after the platform work in Phase 1-2** | builds #33/#34: `GATE PASS (shared)`, 0 of 29 030 responses >= 500, in-flight logins across the switch with 0 failures, 0 `invalid_grant`, logout probes with 0 refreshed (`README.md` Results). | Same gate on prod-like infra (real AZs, real LB, managed DB) at prod login rate. The negative control (no `stateless`) is still not run (accepted). |
-| Lossy overlap + replay (minor/major) | **Demo-verified by a live gate PASS; NO-GO for production** | builds #35-#37: `minor`, `minor-rollback`, `major` all PASS; sessions lost = silent re-logins 4 / 9 / 5; no pre-copy-point session lost, no logged-out session resurrected; 82 / 90 / 68 users replayed (`README.md` Results). | A durable replay sink; answers on offline tokens and refresh-token rotation (section 2.3). |
+| Lossy overlap + replay (minor/major) | **Demo-verified by a live gate PASS; NO-GO for production** | builds #35-#37: `minor`, `minor-rollback`, `major` all PASS; sessions lost = silent re-logins 4 / 9 / 5; no pre-copy-point session lost, no logged-out session resurrected; 82 / 90 / 68 users replayed (`README.md` Results). | The DB-diff replay run on Oracle; refresh-token rotation confirmed off in every realm (section 2.3). Offline tokens: not used in the target production (stated 2026-11-11). |
 | Rollback, shared DB | **Demo-verified** | build #34 `patch-rollback` PASS: flip back, 0 5xx/network errors, 0 `invalid_grant`, 0 logged-out refreshes. | The same gate on prod-like infra. |
 | Rollback, lossy | **Demo-verified; NO-GO for production** | build #36 `minor-rollback` PASS, forward and reverse replay (2 green-born sessions, 30 logouts + 90 users back). | As for lossy, plus a hold shorter than the SSO idle timeout (section 2.4). |
 | Rollback window in the default path | **Accepted, not built** (2026-11-03) | No hold timer in the code (`ROLLBACK_HOLD` only in PLAN.md). Without `KEEP_OLD=true` the old color is scaled to 0 after the drain (`switch-shared.sh:51-57`, `switch-lossy.sh:67-70`). | Build the hold when a real deployment needs a post-switch window. |
@@ -169,37 +170,40 @@ Blue serves login/token throughout.
 | Events in the DB event store | Lost; stdout copy remains | Yes | Realms do not set `eventsEnabled`, so nothing is stored anyway |
 | Admin-initiated / backchannel logouts | Admin is frozen. Backchannel logout from the upstream IdP: **Open** whether it emits a `LOGOUT` user event | ? | PLAN.md:484: no backchannel receiver |
 
-**Replay from pod stdout: failure modes**
-1. **Log rotation.** `replay.sh:19` uses `kubectl logs --since-time`, which serves only the current log file.
-   kubelet rotates at `containerLogMaxSize` (default 10 Mi). The repo already rejected `kubectl logs` for k6 for
-   this exact reason (wl:slice4-load-gate, Decisions). Keycloak logs JSON on stdout (`helm/values-common.yaml:55`).
-   At production rates a window of minutes can span a rotation. Lines are lost with no error.
-2. **Pod replacement is not detected.** The guard reads `.status.containerStatuses[0].lastState.terminated`
-   (`replay.sh:17-18`). It catches container restarts. A pod that is *deleted and recreated* (eviction, node drain,
-   zone loss, spot reclaim) comes back with empty `lastState`, so its predecessor's lines vanish silently.
-3. **Commit-then-crash.** The listener prints in an after-completion hook
-   (`providers/.../ReplayEventListener.java:87-96`). A pod killed between the DB commit and `println` loses the
-   line. Nothing can detect that afterwards.
-4. **Errors are swallowed.** `admin_api DELETE ... || true` (`replay.sh:30,39,40`) treats every failure as "404 =
-   fine", including 401, 5xx and timeouts. A failed logout replay is counted as replayed. The result is a
-   resurrected session (the exact security property replay exists for).
-5. **Silent precondition.** If config drift removes `demo-replay` from `eventsListeners`
-   (`config/online/50-realm.json:4`), replay finds 0 lines and reports success. Only realm `demo` is replayed
-   (`replay.sh:27`).
+**Replay source: the old color's database (since 2026-11-11)**
 
-**Rec: durable event sink.** Keep the listener and its transaction hook, but change the target:
+`replay.sh <from> <to> <from-db> <to-db> <limit>` no longer reads events. Blue's DB stays readable after the promote,
+and what blue committed is in it, whatever happened to its pods:
+- **Users**: ids in `user_entity` on `<from>` that `<to>` does not have -> fetched from `<from>` (user, federated
+  links, realm roles, groups) and imported with the same id.
+- **Sessions**: a session `<to>` holds from the copy (created before `limit`, a moment after the copy and before the
+  new color existed) is deleted when `<from>` no longer has it (logout) or no longer has one of its client sessions
+  (token revocation removes only that row: measured on 26.8.1; the whole session goes, as before).
+- **Fails closed** (`replay_session_diff`, `scripts/lib/kc.sh`, tested in `scripts/test-lib.sh`): an empty source
+  listing, or a delete set over 50 % of the copied sessions, stops the replay instead of logging everyone out.
 
-| Option | Durability | Ordering / idempotency | Ops cost | Verdict |
-|---|---|---|---|---|
-| Pod stdout + `kubectl logs` (today) | None (rotation, replacement, crash) | Idempotent apply, no completeness proof | none | Demo only |
-| Central log pipeline (Loki/ELK) queried by time | Better; depends on the shipper's buffering | No completeness proof | already exists in most orgs | Acceptable stop-gap with a completeness check (counts per pod) |
-| **Outbox table in the same DB, written in the request transaction** | Atomic with the write itself | Monotonic id; replay = `SELECT ... WHERE id > :mark` on blue's DB | One table, one cleanup job | **Recommended.** Blue's DB stays readable after promote, so the replay reads straight from it. No log infra in the critical path. |
-| Kafka via an event-listener SPI (e.g. the community keycloak-kafka style) | Durable if the producer is transactional/acked | Partitioned ordering | Kafka dependency on the login path | Good if Kafka is already a platform service; otherwise overkill |
+What this closes, of the old stdout source's loss paths: log rotation, pod replacement, commit-then-crash (there is no
+second write any more), and the silent precondition (no listener to be missing from the realm config). Errors were
+already no longer swallowed (`apply`: 2xx or 404, else fail).
 
-With an outbox table, the replay window no longer depends on clocks (`copy_iso = now - 5s`, `switch-lossy.sh:30`).
-Use the outbox row id at the copy point instead.
-- Also replace `|| true` with "404 or 2xx else fail".
-- Make replay exit non-zero if the listener is not enabled on every realm in scope.
+Evidence (Postgres, builds #21-#24 on `3d8c8d6`): `minor`, `major`, `minor-rollback` gates PASS. On `major` (old color
+25.0.6), 0 of the 61 sessions the listener saw logged out on blue remained in green's DB. Build #24 ran with planted
+sessions: logout on blue in the window, token revocation on blue in the window (two clients), logout on green, token
+revocation on green (two clients), one control; 15 of 15 checks (refresh result and DB row, after the forward replay
+and after the rollback) as expected.
+
+What stays open:
+- **Oracle**: `db_rows` in `oracle/db.sh` is not run live. Until it is, this branch is not merged.
+- **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
+  live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
+  `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
+- **Cost per new user**: 4 admin calls on blue + 1 import on green. Roughly 0.4 s per user here (from the stage offsets, not timed); it sits in the lossy
+  window (first pass) and in the rollback. Fine for tens of users per window, batch it for more.
+- **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it once the Oracle
+  run has passed, or keep it as an audit trail.
+- k6 barely exercises the session diff (3-4 sessions forward, 0 on the rollback per run): the planted-session check
+  was a one-off manual script (not in the repo), not part of the gate.
+- Only realm `demo` is replayed. Offline sessions (`offline_flag = 1`) are not.
 
 **Window length on a large DB**
 - The *lossy window* is `copy_point -> switch`. It contains:
@@ -221,8 +225,9 @@ Use the outbox row id at the copy point instead.
 **Rec (verdict)**: before any production use:
 - ~~a live minor gate PASS and a major gate PASS~~ **done 2026-11-03** (builds #35, #37)
 - ~~the cross-major refresh-token result recorded (PLAN.md:411-414 decision rule)~~ **done** (build #37)
-- the durable sink
-- the two Opens answered: offline tokens, refresh-token rotation
+- ~~the durable sink~~ **done on Postgres 2026-11-11** (DB diff, above); Oracle run open
+- offline tokens: not used in the target production (stated 2026-11-11); refresh-token rotation: believed off, to be
+  confirmed per realm (`revokeRefreshToken`)
 
 If refresh-token rotation is on in prod, consider the strict write-freeze variant (PLAN.md:30, designed, not
 built) instead of lossy. A short 503 on login/token is honest. A wave of `invalid_grant` is not.
@@ -250,7 +255,7 @@ built) instead of lossy. A short 503 on login/token is honest. A wave of `invali
   DB. If the hold exceeds the realm's SSO idle timeout, those sessions are expired on rollback (wl:gate-rollback:
   "assume blue's stale lastSessionRefresh stays inside SSO idle timeout [assumed]"). The demo uses 2 h idle
   (`config/bootstrap/10-demo-realm.json:4`). Production realms often use 30 min.
-- The same four replay loss paths apply in reverse (green pods' stdout).
+- The reverse replay reads green's DB the same way (section 2.3).
 
 **Rec**
 - Hold period = min(time to detect a bad release from SLOs, SSO idle timeout - margin). In practice 15-30 min.

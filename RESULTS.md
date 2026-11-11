@@ -54,6 +54,14 @@ What the numbers mean:
   window (about 155-190 s).
 - The window is dominated by green's start and migration, not by the copy.
 
+## Since these runs: replay from the database (branch `replay-db-diff`)
+
+The numbers above were measured with the replay reading the event listener's log lines. On the branch
+`replay-db-diff` the replay reads the old color's database instead (no log to lose). Postgres builds #21-#24:
+`minor`, `major`, `minor-rollback` PASS, plus a run with planted sessions (logout and token revocation on each
+color: 15 of 15 checks). Lossy window 115-135 s, lossy rollback 56 s: the first replay pass is slower per new user.
+Not run on Oracle, so not merged. Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
+
 ## Caveats
 
 - **One run per case.** Run-to-run spread is real: an earlier Postgres run the same day had lossy windows of
