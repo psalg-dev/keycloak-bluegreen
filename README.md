@@ -145,7 +145,7 @@ profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (her
 ## Results
 
 Both engines measured on **2026-11-11**, default profile, one machine, one KinD cluster per engine, five cases back to
-back through Jenkins, branch `both-engines`. **All ten gates PASS; 0 5xx / network errors in every case.** One run per
+back through Jenkins. **All ten gates PASS; 0 5xx / network errors in every case.** One run per
 case: expect run-to-run spread. The full reports are `out/report.html` and `out/oracle/report.html` (gitignored;
 Jenkins archives them).
 
@@ -158,33 +158,35 @@ the mechanism, engine-independent, and needs a post-flip duplicate followed by a
 
 ### Postgres (CloudNativePG)
 
-Builds **#1** (`patch`), **#4** (`patch-rollback`) on `bf7e313`; **#6** (`minor`), **#7** (`major`), **#8**
-(`minor-rollback`) on `df36c1b`.
+Builds **#16** (`patch`), **#17** (`minor`), **#18** (`major`), **#19** (`patch-rollback`), **#20** (`minor-rollback`),
+all on `f159cbe` (the final code, all three fixes in): a second run of the day on a fresh cluster. The first run
+(builds #1-#8, before the k6 and replay fixes) passed the same gates with the same picture.
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
 |---|---|---|---|---|---|
-| k6 requests | 14,703 | 15,855 | 28,307 | 39,073 | 24,060 |
+| k6 requests | 14,181 | 14,765 | 24,005 | 30,265 | 24,626 |
 | 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
-| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.17 % (0.45 %) | 0.26 % (0.74 %) | 0.17 % (0.55 %) |
-| users potentially impacted (of users seen) | 1 of 874 (slow only) | 2 of 934 (slow only) | 37 of 1,485 (2.5 %) | 66 of 1,838 (3.6 %) | 26 of 1,288 (2.0 %) |
-| lossy window (copy point -> switch) | - | - | 169.7 s | 128.0 s | 118.9 s |
-| sessions lost (born on the old color in the window) | 0 | 0 | 390 (381 users) | 290 (280 users), +452 green-born (435 users) at the rollback | 278 (269 users) |
-| of those, seen lost by k6 = silent re-logins | 0 | 0 | 6 | 11 (+6 green-born, at the rollback) | 4 |
-| logouts / new users replayed | - | - | 22 / 70 | 19 / 48 forward, 24 / 76 back | 16 / 52 |
-| users repaired (post-flip race) | - | - | 0 | 0 | 0 |
-| resurrection window (switch -> replay done) | - | - | 62.1 s | 48.3 s, rollback 56.6 s | 49.7 s |
-| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.2 s | 48.9 s | - | - | - |
-| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 65.5 s (reverse replay + purge) | - |
-| p95 network latency pre / cutover / post | 62 / 65 / 59 ms | 87 / 92 / 88 ms | 118 / 126 / 89 ms | 116 / 115 / 104 ms | 114 / 108 / 103 ms |
-| step classes with cutover p95 >= 2x | introspection 2.0x | none | none | introspection 2.64x | none |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.19 % (0.66 %) | 0.35 % (0.96 %) | 0.17 % (0.57 %) |
+| users potentially impacted (of users seen) | 0 of 847 | 4 of 854 (slow only) | 25 of 1,285 (1.9 %) | 68 of 1,525 (4.5 %) | 26 of 1,313 (2.0 %) |
+| lossy window (copy point -> switch) | - | - | 109.5 s | 112.8 s | 115.1 s |
+| sessions lost (born on the old color in the window) | 0 | 0 | 254 (249 users) | 261 (253 users), +358 green-born (345 users) at the rollback | 265 (257 users) |
+| of those, seen lost by k6 = silent re-logins | 0 | 0 | 3 | 9 (+4 green-born, at the rollback) | 4 |
+| logouts / new users replayed | - | - | 14 / 49 | 16 / 40 forward, 17 / 53 back | 16 / 50 |
+| users repaired (post-flip race) | - | - | 0 | 1 (on the rollback) | 0 |
+| resurrection window (switch -> replay done) | - | - | 38.8 s | 40.0 s, rollback 42.8 s | 39.1 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.1 s | 42.9 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 39.3 s (reverse replay + purge) | - |
+| p95 network latency pre / cutover / post | 60 / 62 / 57 ms | 82 / 82 / 73 ms | 60 / 60 / 69 ms | 77 / 80 / 83 ms | 86 / 70 / 69 ms |
+| step classes with cutover p95 >= 2x | introspection 2.2x | none | none | introspection 2.3x | none |
 | schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
-| replica at the promote vs copy LSN | - | - | 0/B2A8378 >= 0/B28B7A0 | 0/AD935B8 >= 0/AD92B70 | 0/9491578 >= 0/94902D8 |
+| replica at the promote vs copy LSN | - | - | 0/AE17F78 >= 0/AE115D0 | 0/AB57278 >= 0/AB2B458 | 0/932D0F0 >= 0/932D0F0 |
 
-Memory, all five cases (docker stats every 15 s): **12.65 GiB** peak for the KinD nodes, **14.03 GiB** with Jenkins
-(rollback phase of `minor-rollback`: both colors and both Postgres clusters up).
+Memory, all five cases (docker stats every 15 s): **12.23 GiB** peak for the KinD nodes, **13.16 GiB** with Jenkins
+(rollback phase of `minor-rollback`: both colors and both Postgres clusters up). The first run of the day peaked at
+12.65 / 14.03 GiB.
 
 The lossy cases carry more requests than on Oracle: the switch stage first builds green's Postgres cluster as a
-streaming replica (4 to 5.5 minutes from stage start to `replica_ready` in these runs), under load and before the copy
+streaming replica (4.3 to 5 minutes from stage start to `replica_ready` in these runs), under load and before the copy
 point, so none of it is in the lossy window.
 
 ### Oracle 19.3
@@ -219,26 +221,25 @@ with Jenkins. The Oracle pod's working set peaked at 2.5 GiB of its 6 GiB limit.
 ### Reading it
 
 - **Sessions lost is the exposure, not what k6 saw.** Every session created on the old color between the copy point
-  and the flip is missing on the new one: 278-390 sessions per lossy case on Postgres, 286-315 on Oracle, roughly a
-  quarter to a third of the users seen in a run. Each of them re-logins (silently, through legacy SSO) the next time
-  they return. k6 comes back to about ten sessions (its refresh VUs), so it sees 3-11 of them die; those are the
-  sample the gate judges. A rollback additionally drops every session born on the new color (360-452).
-- **Users potentially impacted** (2.0-4.8 % in the lossy cases) counts people who hit at least one error line (a lost
+  and the flip is missing on the new one: 254-265 sessions per lossy case on Postgres, 286-315 on Oracle, roughly a
+  fifth to a third of the users seen in a run. Each of them re-logins (silently, through legacy SSO) the next time
+  they return. k6 comes back to about ten sessions (its refresh VUs), so it sees 3-9 of them die; those are the
+  sample the gate judges. A rollback additionally drops every session born on the new color (358-360).
+- **Users potentially impacted** (1.9-4.8 % in the lossy cases) counts people who hit at least one error line (a lost
   session's `invalid_grant`, a login straddling the flip, a channel logout for a session Keycloak no longer had) or a
-  request over 1 s. The shared cases: slow-only users, no errors. Definition:
+  request over 1 s. The shared cases: at most a few slow-only users, no errors. Definition:
   [docs/failure-modes.md](docs/failure-modes.md).
 - The errors in the lossy cases are the trade the mechanism makes, all inside its bound. No session born before the
   copy point was lost and no logged-out session came back after the replay, on either engine.
 - **The copy is now proven per run** (`db_copy_matches_source`): Postgres by the replica's replay LSN at the promote,
   Oracle by row counts against the source `AS OF` the copy SCN. Before this run the rule had never passed live.
-- **Engines compared**: the lossy window is the same order on both (119-170 s Postgres, 124-142 s Oracle); it is
-  dominated by green's start and migration, not by the copy. The Oracle rollback was faster here (40 s vs 65 s), within
-  what one run can show.
+- **Engines compared**: the lossy window is the same order on both (110-115 s Postgres, 124-142 s Oracle); it is
+  dominated by green's start and migration, not by the copy. The lossy rollback took about 40 s on both.
 - **Oracle shared cases, latency during the pod kill**: `patch` shows introspection at 32.7x its pre-cutover p95 and
-  `patch-rollback` at 5.6x, with no errors and the overall p95 unchanged. The Postgres runs show at most 2.6x. One run
+  `patch-rollback` at 5.6x, with no errors and the overall p95 unchanged. The Postgres runs show at most 2.3x. One run
   each; the cause was not investigated.
 - Admin and account console answer 503 for the whole cutover window in the lossy cases (copy point -> window end,
-  about 170-240 s). Login, token, refresh, logout, discovery and JWKS never stop.
+  about 155-190 s). Login, token, refresh, logout, discovery and JWKS never stop.
 
 ## More
 
