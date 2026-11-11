@@ -27,10 +27,11 @@ freeze
 trap 'unfreeze >/dev/null 2>&1 || true' EXIT # a failed copy must not leave admin/account 503
 event window_start
 
-# 3-5. Copy point .. green's DB is a writable copy of it (events copy_point, promoted). Blue keeps writing;
-#      logouts/creations after this time are replayed.
-copy_iso=$(date -u -d "-5 seconds" +%FT%TZ) # replay window starts a bit early on purpose (idempotent)
+# 3-5. Copy point .. green's DB is a writable copy of it (events copy_point, promoted). Blue keeps writing; what it
+#      writes from here on is replayed from its DB (scripts/replay.sh). limit: after the copy, before green exists,
+#      so every session green's DB holds from before it came out of the copy.
 db_copy_cut "$src" "$new"
+limit=$(date -u +%FT%TZ)
 
 # 6. Green on its own DB: the new version migrates it. The changelog count proves the migration ran.
 before=$(db_changesets "$new")
@@ -44,15 +45,15 @@ scripts/config.sh online "$idle"
 [[ ${RUN_MAINTENANCE:-false} =~ ^(true|1)$ ]] && scripts/config.sh maintenance "$idle"
 
 # 8-10. Replay, switch, replay at once, drain, replay again (catches what blue wrote during the drain).
-scripts/replay.sh "$active" "$idle" "$copy_iso"
+scripts/replay.sh "$active" "$idle" "$src" "$new" "$limit"
 event switch from="$active" to="$idle"
 set_active "$idle" "$new" "$target"
 event flipped to="$idle" # ingress-nginx routes to the new color now (set_active waits for it; gate: acrossflip)
 # right away: users the old color created since the first replay, before the person logs in on the new color and it
 # makes a duplicate (replay.sh repairs any that slip through); the post-drain replay below catches in-flight stragglers
-scripts/replay.sh "$active" "$idle" "$copy_iso"
+scripts/replay.sh "$active" "$idle" "$src" "$new" "$limit"
 sleep "${DRAIN_SECONDS:-15}"
-scripts/replay.sh "$active" "$idle" "$copy_iso"
+scripts/replay.sh "$active" "$idle" "$src" "$new" "$limit"
 event replay_done
 
 # 11. Unfreeze. 12. KEEP_OLD=true: old color + old DB stay up for scripts/rollback.sh (it reverse-replays green's

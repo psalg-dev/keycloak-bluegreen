@@ -279,6 +279,31 @@ admin_direct_start() {
 }
 admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE ADMIN_PF; ADMIN_TOKEN=; }
 
+# replay_session_diff <to_us> <from_us> <to_cs> <from_cs> <limit_s> <reverse 0|1>: the session ids replay.sh must delete
+# on <to>. Files: *_us = "sid|created_on" (user sessions), *_cs = "sid|client|timestamp" (client sessions).
+# A candidate is a <to> session created before <limit_s> (a moment after the copy point and before the new color
+# took traffic: sessions the new color made itself are never touched). It goes when <from> no longer has it (logout)
+# or no longer has one of its client sessions (token revocation removes only that row; there is no admin call for one
+# client session, so the whole session goes: the conservative superset the log replay applied too).
+# Forward, a client session counts only if untouched since the copy (timestamp < limit): one the new color created
+# after the flip is not on the old color either. Reverse, every one counts (the old color had no traffic since).
+# Fails closed: an empty source listing or an implausibly large delete set is a broken read, not a mass logout.
+replay_session_diff() {
+  local out n cand
+  out=$(awk -F'|' -v limit="$5" -v rev="$6" '
+    FILENAME == ARGV[1] { fus[$1] = 1; next }
+    FILENAME == ARGV[2] { fcs[$1 "|" $2] = 1; next }
+    FILENAME == ARGV[3] { if ($2 < limit) { cand[$1] = 1; if (!($1 in fus)) del[$1] = 1 } next }
+    ($1 in cand) && (rev == 1 || $3 < limit) && !(($1 "|" $2) in fcs) { del[$1] = 1 }
+    END { n = 0; for (s in cand) n++; print "#" n; for (s in del) print s }' "$2" "$4" "$1" "$3")
+  cand=$(sed -n '1s/^#//p' <<<"$out"); out=$(sed 1d <<<"$out")
+  n=$(grep -c . <<<"$out" || true)
+  [[ $cand -eq 0 || -s $2 ]] || die "replay: the source has no sessions at all but the target has $cand from the copy: broken read, not $cand logouts"
+  [[ $n -le 20 || $((n * 100)) -le $((cand * ${REPLAY_MAX_DELETE_PCT:-50})) ]] \
+    || die "replay: would delete $n of $cand copied sessions (> ${REPLAY_MAX_DELETE_PCT:-50} %): refusing (REPLAY_MAX_DELETE_PCT overrides)"
+  [[ -z $out ]] || sort <<<"$out"
+}
+
 # k6_status: one line of what the load generator has seen so far (requests, 5xx/status 0, refresh invalid_grant,
 # logins, logged-out sessions that still refresh), or "k6 not running"
 k6_status() {

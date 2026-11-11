@@ -71,6 +71,8 @@ delete_dbs() {
 db_helm_args() { DB_HELM_ARGS=(--set "externalDatabase.host=$1-rw" --set "externalDatabase.existingSecret=$1-app"); }
 db_verify() { :; } # ponytail: Postgres has no wrong-schema failure mode here (one database per cluster)
 db_changesets() { psql_db "$1" "select count(*) from databasechangelog" keycloak; }
+# db_rows <db> <select of ONE text column>: the rows, one per line, nothing else (replay.sh builds a|b itself with ||)
+db_rows() { psql_db "$1" "$2" keycloak; }
 
 # db_copy_prepare <src> <new>: green's DB as a streaming replica of the active one. Before the freeze: the base backup
 # is the long part and blue loses nothing while it runs.

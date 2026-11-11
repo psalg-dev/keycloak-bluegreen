@@ -36,6 +36,21 @@ if ora "db_schema 'kc1;drop'" 2>/dev/null; then echo "FAIL db_schema accepted in
   || { echo "FAIL oracle laptop preflight"; exit 1; }
 }
 if DB_ENGINE=bogus bash -c ". '$lib'" 2>/dev/null; then echo "FAIL unknown DB_ENGINE accepted"; exit 1; fi
+# replay_session_diff (limit 100): gone = logged out on the source; rev = its client session c2 revoked there;
+# born = made by the target after the limit (never touched); newcs = target-made client session on a copied session
+# (forward: ignored, reverse: counts); keep = same on both sides
+printf '%s\n' 'gone|50' 'rev|60' 'born|150' 'newcs|70' 'keep|80' > to_us
+printf '%s\n' 'rev|60' 'newcs|70' 'keep|80' > from_us
+printf '%s\n' 'gone|c1|50' 'rev|c1|60' 'rev|c2|60' 'born|c1|150' 'newcs|c1|70' 'newcs|c2|120' 'keep|c1|90' > to_cs
+printf '%s\n' 'rev|c1|60' 'newcs|c1|70' 'keep|c1|200' > from_cs
+[[ $(replay_session_diff to_us from_us to_cs from_cs 100 0 | xargs) == "gone rev" ]] || { echo "FAIL replay_session_diff forward"; exit 1; }
+[[ $(replay_session_diff to_us from_us to_cs from_cs 100 1 | xargs) == "gone newcs rev" ]] || { echo "FAIL replay_session_diff reverse"; exit 1; }
+: > empty
+if (replay_session_diff to_us empty to_cs empty 100 0) >/dev/null 2>&1; then echo "FAIL replay_session_diff accepted an empty source"; exit 1; fi
+[[ -z $(replay_session_diff empty empty empty empty 100 0) ]] || { echo "FAIL replay_session_diff on nothing"; exit 1; }
+seq 100 | sed 's/$/|50/' > many_us; head -30 many_us > part_us
+if (replay_session_diff many_us part_us empty empty 100 0) >/dev/null 2>&1; then echo "FAIL replay_session_diff accepted 70 % deletes"; exit 1; fi
+[[ $(REPLAY_MAX_DELETE_PCT=80 replay_session_diff many_us part_us empty empty 100 0 | wc -l) -eq 70 ]] || { echo "FAIL REPLAY_MAX_DELETE_PCT"; exit 1; }
 # every script outside lib/ runs as a command (Jenkins, other scripts): committed 100755. Windows checkouts don't record
 # chmod, so a new script lands 100644 and fails with exit 126 at its first call (purge-sessions.sh, laptop build #31)
 noexec=$(git -C "$(dirname "$lib")/../.." ls-files -s 'scripts/*.sh' 'oracle/*.sh' \

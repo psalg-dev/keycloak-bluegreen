@@ -23,22 +23,23 @@ if [[ $curdb == "$olddb" ]]; then
   set_active "$old" "$olddb" "$oldv"
   event flipped to="$old"
 else
-  # green had no traffic before the forward switch, so its replay lines start there
-  since=$(jq -r 'select(.event == "switch") | .t' out/events.jsonl 2>/dev/null | tail -1)
-  since=$(date -u -d "@$(( $(date -u -d "${since:-1 hour ago}" +%s) - 5 ))" +%FT%TZ)
+  # the forward switch's limit (switch-lossy.sh): after the copy, before the new color existed
+  limit=$(jq -r 'select(.event == "promoted") | .t' out/events.jsonl 2>/dev/null | tail -1)
+  [[ -n $limit ]] || die "no promoted event in out/events.jsonl: cannot tell copied sessions from later ones"
   freeze
   event rollback_window_start
-  scripts/replay.sh "$cur" "$old" "$since"
   # the old color's own sessions from after the copy point: lost on the new color already, and any logout made there
-  # can't reach them (purge-sessions.sh says why); they go before the old color takes traffic again
+  # can't reach them (purge-sessions.sh says why); they go before the old color takes traffic again, and before the
+  # replay, whose diff would otherwise count them all as logouts (and trip its guard)
   cp=$(jq -r 'select(.event == "copy_point") | .t' out/events.jsonl | tail -1)
   scripts/purge-sessions.sh "$old" "${cp:?no copy_point event, cannot purge the window sessions of the old color}"
+  scripts/replay.sh "$cur" "$old" "$curdb" "$olddb" "$limit" reverse
   event rollback from="$cur" to="$old"
   set_active "$old" "$olddb" "$oldv"
   event flipped to="$old"
-  scripts/replay.sh "$cur" "$old" "$since" # at once, see switch-lossy.sh
+  scripts/replay.sh "$cur" "$old" "$curdb" "$olddb" "$limit" reverse # at once, see switch-lossy.sh
   sleep "${DRAIN_SECONDS:-15}"
-  scripts/replay.sh "$cur" "$old" "$since"
+  scripts/replay.sh "$cur" "$old" "$curdb" "$olddb" "$limit" reverse
   event rollback_replay_done
   unfreeze
   event rollback_window_end
