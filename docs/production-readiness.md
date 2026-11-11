@@ -202,7 +202,10 @@ What stays open:
   admin call re-fetching its token), and the lossy window grew to 180-187 s. Now one tagged read per database, in
   parallel, one `partialImport` per 200 users and one token per color: 5 s for 53 users and 5 sessions forward, 5 s for
   65 users on the rollback. Lossy window 128 s, lossy rollback 41 s: back to what the log replay had (124-142 s, 40 s).
-  Not re-timed on Postgres with this version.
+  Postgres `minor-rollback` #30 (`428fe77`, planted sessions 15 of 15): lossy window 105 s, lossy rollback 20 s. The
+  rollback's cost had been the purge (64 s for 287 sessions in #29, every admin call fetching a new token); the
+  token is now fetched once per port-forward and renewed after 30 s (7 s for 223 sessions). `428fe77` has not run on
+  Oracle (the change is in the shared admin helper, not in engine code).
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.

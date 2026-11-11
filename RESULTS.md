@@ -63,6 +63,7 @@ color: 15 of 15 checks). Lossy window 115-135 s; the first replay pass took 15-2
 order as the log replay (15 s for 34). The lossy rollback took 56 s (39 s before); why was not investigated.
 Oracle 19.3 builds #26-#28: `minor-rollback` (with the planted sessions, 15 of 15, twice) and `major` PASS. After
 cutting the replay's round trips (#28): lossy window 128 s, lossy rollback 41 s, a replay pass 5 s for 53 users.
+Postgres #30 with the admin token kept as well: lossy window 105 s, lossy rollback 20 s (39 s before), 15 of 15.
 Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
 
 ## Caveats
