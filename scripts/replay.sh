@@ -37,6 +37,16 @@ import_user() { # replay line -> partialImport of that user with its original id
     | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$1")"
 }
 has_user() { [[ $(admin_api GET "/realms/demo/users/$1" -o /dev/null -w '%{http_code}' || true) == 200 ]]; }
+# gone_on_from <id>: 404 for that user on <from>; anything but 200/404 fails (an error must not read as "gone").
+# ponytail: re-points the one port-forward at <from> and back; only on the username-conflict path, which is rare.
+gone_on_from() {
+  local code
+  admin_direct_stop; admin_direct_start "$from"
+  code=$(admin_api GET "/realms/demo/users/$1" -o /dev/null -w '%{http_code}' || true)
+  admin_direct_stop; admin_direct_start "$to"
+  [[ $code == 200 || $code == 404 ]] || die "replay: GET user $1 on $from -> HTTP ${code:-none}"
+  [[ $code == 404 ]]
+}
 since_ms=$(( $(date -u -d "$since" +%s) * 1000 ))
 repaired=()
 
@@ -61,6 +71,12 @@ while read -r l; do
       if ! has_user "$(jq -r .userId <<<"$l")"; then
         u=$(jq -r .username <<<"$l")
         dup=$(admin_api GET "/realms/demo/users?username=$u&exact=true" | jq -c '.[0] // empty')
+        # The line's user may no longer exist on <from>: it was the duplicate an earlier replay ONTO <from> deleted
+        # (repair below), and <to> holds the original. Replaying it would fail here or, worse, "repair" the original
+        # away (Oracle minor-rollback 2026-11-11: forward repair of user4634, then the rollback died on its line).
+        if [[ -n $dup ]] && gone_on_from "$(jq -r .userId <<<"$l")"; then
+          log "skip $u: $(jq -r .userId <<<"$l") no longer exists on $from (a repaired duplicate)"; continue
+        fi
         [[ -n $dup && $(jq -r .createdTimestamp <<<"$dup") -ge $since_ms ]] \
           || die "replay user $u: id $(jq -r .userId <<<"$l") not on $to, and the username's user there predates the window: sub changed"
         log "repair $u: $to created it again ($(jq -r .id <<<"$dup")) after the flip; restoring the original id"
