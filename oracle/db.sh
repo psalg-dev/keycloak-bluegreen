@@ -216,7 +216,7 @@ db_helm_args() {
 db_verify() { oracle/check-db.sh "$1"; } # Keycloak Ready is not proof it used the schema we intended
 db_changesets() { sql_scalar "$1" "SELECT COUNT(*) FROM DATABASECHANGELOG"; }
 # db_rows <db> <select of ONE text column>: the rows, one per line (SQL*Plus pads and adds blank lines: stripped).
-# NOT RUN LIVE yet (written 2026-11-11 with the DB-diff replay, tested on Postgres only).
+# First run live in builds #26/#27 (2026-11-11).
 db_rows() { sql_db "$1" "$2" | tr -d '\r' | sed 's/[[:space:]]*$//; /^$/d'; }
 
 # db_copy_prepare <src> <new>: the empty target schema. A retry after a failed import must not import into a

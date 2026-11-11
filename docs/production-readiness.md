@@ -18,10 +18,9 @@ auth server, `hostname-strict=false` behind several ingresses.
 - The replay source was `kubectl logs` of pod stdout until 2026-11-11; now the old color's DB (section 2.3).
 
 **Biggest gaps (ranked)**
-1. **The replay source: fixed on Postgres, open on Oracle (2026-11-11).** The replay used to read the event
-   listener's lines from pod stdout (silent loss: log rotation, a crash between commit and `println`). It now reads the
-   old color's database and diffs it against the new one (`scripts/replay.sh`, section 2.3). Verified live on Postgres
-   only; the Oracle `db_rows` is written, not run.
+1. **The replay source: fixed (2026-11-11).** The replay used to read the event listener's lines from pod stdout
+   (silent loss: log rotation, a crash between commit and `println`). It now reads the old color's database and diffs
+   it against the new one (`scripts/replay.sh`, section 2.3). Verified live on Postgres and Oracle 19.3.
 2. **The DB is the single point of the design** and is under-specified for production. The demo has no backups or
    PITR. The `stateless` requirements apply: synchronous HA replication, commit latency under 10 ms, roughly 2x DB
    load. The replica-and-promote step must be re-engineered for a managed DB (section 4).
@@ -40,7 +39,7 @@ auth server, `hostname-strict=false` behind several ingresses.
 | Mechanism | Verdict | Evidence | Condition to flip to GO |
 |---|---|---|---|
 | Shared-DB switch (patch) | **GO for staging; GO for prod after the platform work in Phase 1-2** | builds #33/#34: `GATE PASS (shared)`, 0 of 29 030 responses >= 500, in-flight logins across the switch with 0 failures, 0 `invalid_grant`, logout probes with 0 refreshed (`README.md` Results). | Same gate on prod-like infra (real AZs, real LB, managed DB) at prod login rate. The negative control (no `stateless`) is still not run (accepted). |
-| Lossy overlap + replay (minor/major) | **Demo-verified by a live gate PASS; NO-GO for production** | builds #35-#37: `minor`, `minor-rollback`, `major` all PASS; sessions lost = silent re-logins 4 / 9 / 5; no pre-copy-point session lost, no logged-out session resurrected; 82 / 90 / 68 users replayed (`README.md` Results). | The DB-diff replay run on Oracle; refresh-token rotation confirmed off in every realm (section 2.3). Offline tokens: not used in the target production (stated 2026-11-11). |
+| Lossy overlap + replay (minor/major) | **Demo-verified by a live gate PASS; NO-GO for production** | builds #35-#37: `minor`, `minor-rollback`, `major` all PASS; sessions lost = silent re-logins 4 / 9 / 5; no pre-copy-point session lost, no logged-out session resurrected; 82 / 90 / 68 users replayed (`README.md` Results). | Refresh-token rotation confirmed off in every realm (section 2.3). Offline tokens: not used in the target production (stated 2026-11-11). The platform and DB work of sections 3-4. |
 | Rollback, shared DB | **Demo-verified** | build #34 `patch-rollback` PASS: flip back, 0 5xx/network errors, 0 `invalid_grant`, 0 logged-out refreshes. | The same gate on prod-like infra. |
 | Rollback, lossy | **Demo-verified; NO-GO for production** | build #36 `minor-rollback` PASS, forward and reverse replay (2 green-born sessions, 30 logouts + 90 users back). | As for lossy, plus a hold shorter than the SSO idle timeout (section 2.4). |
 | Rollback window in the default path | **Accepted, not built** (2026-11-03) | No hold timer in the code (`ROLLBACK_HOLD` only in PLAN.md). Without `KEEP_OLD=true` the old color is scaled to 0 after the drain (`switch-shared.sh:51-57`, `switch-lossy.sh:67-70`). | Build the hold when a real deployment needs a post-switch window. |
@@ -192,16 +191,22 @@ sessions: logout on blue in the window, token revocation on blue in the window (
 revocation on green (two clients), one control; 15 of 15 checks (refresh result and DB row, after the forward replay
 and after the rollback) as expected.
 
+Evidence (Oracle 19.3, builds #26-#27 on `6eda4a5`): `minor-rollback` and `major` gates PASS; #26 ran with the same
+planted sessions, 15 of 15 checks as expected. Postgres `minor` #25 (`4eb2fc3`) re-ran after the service-account and
+`enabled`/`emailVerified` changes: PASS, 38 users replayed.
+
 What stays open:
-- **Oracle**: `db_rows` in `oracle/db.sh` is not run live. Until it is, this branch is not merged.
+- **Slower first pass on Oracle**: 37 s for 58 new users in #26 (the log replay took 14 s in the earlier Oracle
+  `minor-rollback`); each of the six reads is a `sqlplus` session through `kubectl exec`. It sits in the lossy
+  window, which was 180-187 s in #26/#27 against 124-142 s before; the replay explains about 23 s of that, the rest
+  (promote, migration, config) was not investigated. One query per side instead of three would cut it.
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
 - **Cost per new user**: 4 admin calls on blue + 1 import on green. The first pass took 15-21 s for 29-44 new users
   (console timestamps, builds #21-#23), the same order as the log replay (15 s for 34); it sits in the lossy window.
   Batch it if a window carries hundreds. The lossy rollback took 56 s against 39 s before: not investigated.
-- **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it once the Oracle
-  run has passed, or keep it as an audit trail.
+- **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it, or keep it as an audit trail.
 - k6 barely exercises the session diff (3-4 sessions forward, 0 on the rollback per run): the planted-session check
   was a one-off manual script (not in the repo), not part of the gate.
 - Token revocation with two clients was measured on 26.8.1 only, not on 26.7.5 or 25.0.6 as the old color.
