@@ -146,8 +146,10 @@ profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (her
 
 Both engines measured on **2026-11-11**, default profile, one machine, one KinD cluster per engine, five cases back to
 back through Jenkins. **All ten gates PASS; 0 5xx / network errors in every case.** One run per
-case: expect run-to-run spread. The full reports are `out/report.html` and `out/oracle/report.html` (gitignored;
-Jenkins archives them).
+case: expect run-to-run spread. The full reports of these runs are checked in:
+[report-postgres.html](report-postgres.html) and [report-oracle.html](report-oracle.html) (self-contained pages:
+download and open in a browser). A fresh run writes `out/report.html` / `out/oracle/report.html` (gitignored; Jenkins
+archives them).
 
 Three defects surfaced during these runs and were fixed before the passing builds (details in the commits):
 the new Postgres caught-up check compared `true` with `t` (first Postgres `minor`/`major`/`minor-rollback` died before
