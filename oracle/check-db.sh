@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# check-db.sh <db>: the Oracle schema exists and Keycloak actually created its schema there (not just "the pod is
+# oracle/check-db.sh <db> (DB_ENGINE=oracle, called by db_verify): the Oracle schema exists and Keycloak actually created its schema there (not just "the pod is
 # Ready"). Catches a Keycloak that started against the wrong schema or a migration that did not run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+DB_ENGINE=oracle
 . scripts/lib/kc.sh
 TAG="verification"
 db=${1:?db}

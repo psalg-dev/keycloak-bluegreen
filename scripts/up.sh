@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent platform bring-up: KinD + ingress-nginx + Oracle + kc1 + blue Keycloak. Run via `docker compose up launcher`.
+# Idempotent platform bring-up: KinD + ingress-nginx + the DB engine (DB_ENGINE) + its first DB + blue Keycloak. Run via `docker compose up launcher`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -51,28 +51,9 @@ fi
 for ns in "$NS" legacy apps; do kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f - >/dev/null; done
 scripts/certs.sh "$NS" legacy apps
 ensure_secret kc-bootstrap-admin password
-ensure_secret "$ORACLE_ADMIN_SECRET" password 12
-kubectl -n "$NS" create configmap oracle-bootstrap --from-file=k8s/oracle/bootstrap.sh --dry-run=client -o yaml \
-  | kubectl apply -f - >/dev/null
-if [[ -n $ORACLE_PULL_SECRET && -n $ORACLE_PULL_SECRET_FILE ]]; then
-  kubectl -n "$NS" create secret generic "$ORACLE_PULL_SECRET" \
-    --from-file=.dockerconfigjson="$ORACLE_PULL_SECRET_FILE" --type=kubernetes.io/dockerconfigjson \
-    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-fi
-# envsubst takes only the template's inputs: an unrestricted call would eat Oracle's V$PDBS in the probe SQL.
-# shellcheck disable=SC2016 # the single-quoted list is envsubst's variable whitelist, not a shell expansion
-NS=$NS DB_SERVICE=$DB_SERVICE ORACLE_IMAGE=$ORACLE_IMAGE ORACLE_SID=$ORACLE_SID \
-  ORACLE_ADMIN_SECRET=$ORACLE_ADMIN_SECRET ORACLE_CPUS=$ORACLE_CPUS ORACLE_MEMORY=$ORACLE_MEMORY \
-  ORACLE_SGA_MB=$ORACLE_SGA_MB ORACLE_PGA_MB=$ORACLE_PGA_MB ORACLE_STORAGE=$ORACLE_STORAGE \
-  envsubst '$NS $DB_SERVICE $ORACLE_IMAGE $ORACLE_SID $ORACLE_ADMIN_SECRET $ORACLE_CPUS $ORACLE_MEMORY $ORACLE_SGA_MB $ORACLE_PGA_MB $ORACLE_STORAGE' \
-  < k8s/oracle/oracle.yaml.tpl | kubectl apply -f - >/dev/null
-if [[ -n $ORACLE_PULL_SECRET ]]; then
-  kubectl -n "$NS" patch statefulset oracle --type merge \
-    -p "{\"spec\":{\"template\":{\"spec\":{\"imagePullSecrets\":[{\"name\":\"$ORACLE_PULL_SECRET\"}]}}}}" >/dev/null
-fi
-oracle_ready
-log "oracle ready ($ORACLE_IMAGE, service $DB_SERVICE)"
-create_db kc1
+kubectl -n "$NS" create configmap kc-engine --from-literal=engine="$DB_ENGINE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+db_platform_up
+create_db "$(db_first)"
 
 # Legacy IdP (outside world). Its broker client secret is copied to Keycloak's namespace for the IdP configs.
 if ! kubectl -n legacy get secret legacy-idp >/dev/null 2>&1; then
@@ -119,7 +100,7 @@ log "test apps ready: https://app.localtest.me, https://api.localtest.me"
 
 kubectl apply -f k8s/edge/ >/dev/null
 if ! kubectl -n "$NS" get configmap kc-state >/dev/null 2>&1; then
-  first_install "$FROM" 1 kc1
+  first_install "$FROM" 1 "$(db_first)"
 else
   set_active "$(state activeColor)" "$(state activeDb)" "$(state version)" # k8s/edge/ hard-codes blue; state wins
 fi

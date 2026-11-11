@@ -1,0 +1,20 @@
+# DB_ENGINE=oracle + Keycloak 25.x: applied after oracle/values.yaml. Helm replaces lists, so this is the FULL list of
+# helm/values-kc25.yaml (no KC_CACHE_EMBEDDED_CLUSTER_NAME, the 25 bootstrap admin) plus the two Oracle entries.
+extraEnvVars:
+  - name: KC_DB
+    value: oracle
+  - name: KC_DB_URL
+    value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
+  - name: KC_DB_POOL_MAX_SIZE
+    value: "30"
+  - name: KC_LOG_CONSOLE_OUTPUT
+    value: json
+  - name: KEYCLOAK_ADMIN
+    value: temp-admin # = auth.adminUser
+  - name: KEYCLOAK_ADMIN_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: kc-bootstrap-admin
+        key: password

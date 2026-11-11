@@ -22,20 +22,17 @@ else
   bad "no Docker daemon: start Docker Desktop (or dockerd) and re-run"
 fi
 
-# 2. Docker VM memory. ESTIMATES, not measurements: the measured peaks are the Postgres ones (default 14.8 GiB with
-# Jenkins, laptop 9.1 GiB). Oracle swaps the CNPG instances for one 6 GiB (19.3) or 4 GiB (Free) instance, and the
-# Oracle runs so far were on a 47 GiB VM without memory sampling. ~15 GiB default, ~13 GiB laptop (Free only).
-if [[ $PROFILE == laptop && $ORACLE_IMAGE != *oracle-free* ]]; then
-  bad "PROFILE=laptop is sized for the gvenzl Free image (4 GiB), not $ORACLE_IMAGE: set ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim ORACLE_MEMORY=4Gi (docs/oracle.md) or use the default profile"
-fi
+# 2. Docker VM memory against the profile's peak for this engine (db_mem_need: measured on Postgres, an estimate on
+# Oracle until a sampled run exists), and whatever else the engine needs from the machine (db_preflight).
+while IFS= read -r line; do [[ -z $line ]] || bad "$line"; done < <(db_preflight)
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
-need=$([[ ${PROFILE} == laptop ]] && echo 13 || echo 15) # GiB
+need=$(db_mem_need) # GiB
 if ((mem > 0)); then
   gib=$((mem / 1073741824))
   if ((gib >= need)); then
-    ok "Docker memory ${gib} GiB (${PROFILE} needs ~${need} GiB)"
+    ok "Docker memory ${gib} GiB (${PROFILE}/${DB_ENGINE} needs ~${need} GiB)"
   else
-    bad "Docker VM has ${gib} GiB, ${PROFILE} peaks at ~${need} GiB: raise it (Docker Desktop -> Settings -> Resources, or .wslconfig memory=14GB for the laptop profile) or set PROFILE=laptop"
+    bad "Docker VM has ${gib} GiB, ${PROFILE}/${DB_ENGINE} peaks at ~${need} GiB: raise it (Docker Desktop -> Settings -> Resources, or .wslconfig memory=14GB for the laptop profile) or set PROFILE=laptop"
   fi
 fi
 

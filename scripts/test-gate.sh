@@ -28,6 +28,8 @@ neterr-before-stop |shared|shared-base shared-inflight-ok shared-neterr    |shar
 pass-lossy         |lossy |lossy-base                                       |lossy |0|db_copy_matches_source=PASS sessions_lost=INFO refresh_pre_copy=PASS invalid_grant_in_window=PASS relogin_ok=PASS logout_after_replay=PASS window_exercised=PASS load_through_cutover=PASS
 copy-short         |lossy |lossy-base                                       |lossy-copy-short|1|db_copy_matches_source=FAIL
 copy-unproven      |lossy |lossy-base                                       |lossy-copy-unproven|1|db_copy_matches_source=FAIL
+copy-pg            |lossy |lossy-base                                       |lossy-pg|0|db_copy_matches_source=PASS
+copy-pg-behind     |lossy |lossy-base                                       |lossy-pg-behind|1|db_copy_matches_source=FAIL
 probe-after-replay |lossy |lossy-base lossy-probe-ok                       |lossy |1|logout_after_replay=FAIL
 pre-copy-grant     |lossy |lossy-base lossy-pre-copy-ig                    |lossy |1|refresh_pre_copy=FAIL invalid_grant_in_window=FAIL
 sub-change         |lossy |lossy-base lossy-sub-change                     |lossy |1|sub_stable=FAIL

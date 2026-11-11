@@ -1,6 +1,6 @@
 #!/bin/bash
 # Runs once, after the database is created (gvenzl: /container-entrypoint-initdb.d; Oracle official:
-# /opt/oracle/scripts/setup). No application schema is created here: scripts/lib/kc.sh create_db owns that, so a
+# /opt/oracle/scripts/setup). No application schema is created here: oracle/db.sh create_db owns that, so a
 # reset can drop/recreate schemas without recreating the database. This only creates the Data Pump directory and
 # raises undo retention so FLASHBACK_SCN exports stay consistent while blue keeps writing.
 set -euo pipefail

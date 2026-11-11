@@ -1,0 +1,30 @@
+# DB_ENGINE=oracle overlay, applied by deploy_color after helm/values-common.yaml (and values-kc25.yaml), before the
+# profile overlay (oracle/db.sh db_helm_args, which also --sets externalDatabase.host/database/schema/existingSecret).
+externalDatabase:
+  port: 1521
+  database: FREEPDB1
+  schema: KC1
+
+# Helm replaces lists, so this is the FULL list from helm/values-common.yaml plus the two Oracle entries: the chart
+# only renders a jdbc:postgresql URL from externalDatabase, and an explicit env var wins over its ConfigMap envFrom.
+# KC_DB_SCHEMA still comes from externalDatabase.schema. The image is built with --db=oracle (db_build_opt).
+# ponytail: the URL repeats the defaults of DB_HOST/DB_SERVICE (oracle/db.sh); change both places together.
+extraEnvVars:
+  - name: KC_DB
+    value: oracle
+  - name: KC_DB_URL
+    value: "jdbc:oracle:thin:@//oracle:1521/FREEPDB1"
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
+  - name: KC_CACHE_EMBEDDED_CLUSTER_NAME
+    value: "{{ .Release.Name }}"
+  - name: KC_DB_POOL_MAX_SIZE
+    value: "30"
+  - name: KC_LOG_CONSOLE_OUTPUT
+    value: json
+
+# Oracle can take >1 s under a 337-session purge (lossy rollback); the default 1 s probe then removes every endpoint
+# and the edge answers 503 (first Oracle minor-rollback run).
+customReadinessProbe:
+  timeoutSeconds: 5
+  failureThreshold: 3

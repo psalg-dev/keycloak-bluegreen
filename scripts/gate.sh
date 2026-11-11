@@ -156,11 +156,14 @@ rule refresh_green_after_rollback r_refresh_green_after_rollback
 # shellcheck disable=SC2016
 [[ $base != lossy ]] || {
 rule refresh_pre_copy r_refresh_pre_copy
-# Measured by switch-lossy.sh after the import: user + session rows of the source AS OF the copy SCN vs the copy.
-# (The old db_copy_caught_up compared the copy SCN with itself: both events carried the same shell variable.)
+# The copy is the source at the copy point, MEASURED by the engine's db_copy_cut and recorded on `promoted`:
+# Oracle: user + session rows of the source AS OF the copy SCN vs the copy (src_rows, copy_rows);
+# Postgres: the replica's replay LSN against the copy LSN, compared by Postgres just before the promote (caught_up).
+# (The first Oracle version compared the copy SCN with itself: both events carried the same shell variable.)
 rule db_copy_matches_source '([$e[] | select(.event == "promoted")][0]) as $pr
   | if $pr == null then skip("needs promoted")
-    elif ($pr.src_rows // "") == "" or ($pr.copy_rows // "") == "" then verdict(false; "promoted has no row counts (source AS OF SCN \($pr.scn // "?") vs copy): the copy is unproven")
+    elif $pr.caught_up != null then verdict($pr.caught_up == "t"; "replica had replayed \($pr.replay_lsn // "?") at the promote, copy point LSN \($pr.lsn // "?")")
+    elif ($pr.src_rows // "") == "" or ($pr.copy_rows // "") == "" then verdict(false; "promoted carries no measurement of the copy (Oracle: src_rows/copy_rows, Postgres: caught_up): the copy is unproven")
     else verdict($pr.src_rows == $pr.copy_rows; "source had \($pr.src_rows) user+session rows at SCN \($pr.scn // "?"), the copy has \($pr.copy_rows)") end'
 if [[ $mode == lossy ]]; then
 rule invalid_grant_in_window r_invalid_grant_in_window

@@ -12,7 +12,8 @@ pipelineJob('kc-bluegreen') {
   parameters {
     choiceParam('CASE', ['patch', 'minor', 'major', 'patch-rollback', 'minor-rollback'], 'Upgrade case (FROM/TO versions come from cases.env); *-rollback = switch, soak, roll back. One build per case: the report (post step) collects every case the workspace holds.')
     booleanParam('RUN_MAINTENANCE', false, 'Also run the config-cli maintenance stage (breaking changes, behind a freeze). Exported as true|false.')
-    choiceParam('PROFILE', ['default', 'laptop'], 'Must match the profile the cluster was created with (PROFILE=laptop docker compose up launcher); a mismatch fails the Reset stage before it deletes anything. laptop = 2 Keycloak pods/color, 2 zones, gvenzl Free Oracle image (scripts/lib/kc.sh).')
+    choiceParam('DB_ENGINE', ['postgres', 'oracle'], 'Must match the engine the cluster was brought up with (DB_ENGINE=oracle docker compose run --rm launcher); a mismatch fails the Reset stage before it deletes anything. oracle: results in out/oracle/<case>/, its own report.')
+    choiceParam('PROFILE', ['default', 'laptop'], 'Must match the profile the cluster was created with (PROFILE=laptop docker compose up launcher); a mismatch fails the Reset stage before it deletes anything. laptop = 2 Keycloak pods/color, 2 zones, 2 Postgres instances or the gvenzl Free Oracle image.')
   }
   definition {
     cpsScm {

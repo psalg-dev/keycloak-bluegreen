@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# switch-lossy.sh <target_version>: the minor/major case. Old and new Keycloak versions cannot share a schema, so
-# green gets its own copy. On Oracle the copy is a consistent Data Pump export of the active schema at a captured SCN,
-# imported into a second schema while blue keeps serving logins/tokens ("lossy overlap"): sessions created on blue
-# after the copy point are lost (users re-login silently via the legacy IdP's SSO); logouts and user creations from
-# that window are replayed onto green. Only admin and the account console are frozen (503). Every step writes an event
-# to out/events.jsonl for the gate.
+# switch-lossy.sh <target_version>: the minor/major case. Old and new Keycloak versions cannot share a DB, so green
+# gets its own copy, taken at a copy point by the engine (Postgres: CNPG replica promoted there; Oracle: Data Pump
+# export at an SCN into a second schema). Blue keeps serving login/token the whole time ("lossy overlap"): sessions
+# created on blue after the copy point are lost (users re-login silently via the legacy IdP's SSO); logouts and user
+# creations from that window are replayed onto green. Only admin and the account console are frozen (503). Every step
+# writes an event to out/events.jsonl for the gate.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/lib/kc.sh
@@ -12,67 +12,34 @@ TAG="deployment"
 target=${1:?target_version}
 active=$(state activeColor) src=$(state activeDb) from=$(state version)
 idle=$([[ $active == blue ]] && echo green || echo blue)
-new=kc$(( ${src#kc} + 1 ))
+new=$(db_next "$src")
 check_profile
 
-# 1. Target schema + pre-built target image. Both before the freeze: only the copy point and the export/import
-#    belong in the window. The Oracle instance stays up; this is a schema copy, not a database rebuild.
-drop_db "$new" # a retry after a failed import must not import into a half-written target
-create_db "$new"
+# 1. Whatever of green's DB can be made before the freeze (Postgres: the whole replica; Oracle: the empty schema), and
+#    the target image: only the copy point and what must follow it belong in the window.
+db_copy_prepare "$src" "$new"
 build_image "$target" 1
 
 # 2. Freeze only what must not be lost and isn't replayed: admin + account console.
 freeze
-# EXIT, not ERR: `die` exits without raising ERR, so an `|| die` below (expdp, impdp, the row check) left the paths
+# EXIT, not ERR: `die` exits without raising ERR, so a `die` in the copy step below left the paths
 # frozen; and ERR stays kc.sh's trap, which logs the failing command.
 trap 'unfreeze >/dev/null 2>&1 || true' EXIT # a failed copy must not leave admin/account 503
 event window_start
 
-# 3. Copy point: the SCN the export reads. Blue keeps writing; logouts/creations after this time are replayed.
+# 3-5. Copy point .. green's DB is a writable copy of it (events copy_point, promoted). Blue keeps writing;
+#      logouts/creations after this time are replayed.
 copy_iso=$(date -u -d "-5 seconds" +%FT%TZ) # replay window starts a bit early on purpose (idempotent)
-copy_scn=$(sql_scalar "$src" "SELECT DBMS_FLASHBACK.GET_SYSTEM_CHANGE_NUMBER FROM dual")
-[[ -n $copy_scn ]] || die "could not read the current SCN from $src"
-event copy_point scn="$copy_scn"
+db_copy_cut "$src" "$new"
 
-# 4. Consistent export at that SCN. expdp runs as SYSTEM (DBA) because a schema export with REMAP_SCHEMA later needs
-#    the Data Pump roles; the KC1 app user never gets DBA rights. The password stays in a Secret and is read here.
-src_schema=$(db_schema "$src") new_schema=$(db_schema "$new")
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
-dump="kc_${stamp}_${src}_to_${new}.dmp" dplog="kc_${stamp}_${src}_to_${new}.log"
-admin_pw=$(kubectl -n "$NS" get secret "$ORACLE_ADMIN_SECRET" -o jsonpath='{.data.password}' | base64 -d)
-oracle_pod_name=$(oracle_pod)
-log "exporting $src_schema at SCN $copy_scn (blue keeps serving; admin/account frozen)"
-kubectl -n "$NS" exec "$oracle_pod_name" -- expdp "system/$admin_pw@//localhost:1521/$DB_SERVICE" \
-  "SCHEMAS=$src_schema" "FLASHBACK_SCN=$copy_scn" "DIRECTORY=KC_DUMP" "DUMPFILE=$dump" "LOGFILE=$dplog" \
-  REUSE_DUMPFILES=YES >/dev/null || die "expdp $src_schema failed (see $dplog in the Oracle pod)"
-
-# 5. Import into the empty target schema. This is the only long step; blue still serves login/token.
-log "importing into $new_schema (REMAP_SCHEMA $src_schema:$new_schema)"
-kubectl -n "$NS" exec "$oracle_pod_name" -- impdp "system/$admin_pw@//localhost:1521/$DB_SERVICE" \
-  "SCHEMAS=$src_schema" "REMAP_SCHEMA=$src_schema:$new_schema" "DIRECTORY=KC_DUMP" "DUMPFILE=$dump" \
-  "LOGFILE=$dplog" EXCLUDE=USER EXCLUDE=STATISTICS >/dev/null || die "impdp into $new_schema failed (see $dplog in the Oracle pod)"
-# Proof that the copy IS the source at the copy point, measured, not restated: users + persisted sessions (the two
-# tables blue keeps writing) in the source AS OF the copy SCN against the copy now. The source's CURRENT count has
-# moved on, so an export that ignored FLASHBACK_SCN or an import that dropped rows shows up here.
-# ponytail: two tables, counts only; DBMS_COMPARISON / per-table hashes if a production copy needs more.
-rows="(SELECT COUNT(*) FROM %s.USER_ENTITY%s) + (SELECT COUNT(*) FROM %s.OFFLINE_USER_SESSION%s)"
-# shellcheck disable=SC2059 # $rows is the format
-src_rows=$(sql_scalar "$src" "SELECT $(printf "$rows" "$src_schema" " AS OF SCN $copy_scn" "$src_schema" " AS OF SCN $copy_scn") FROM dual")
-# shellcheck disable=SC2059
-copy_rows=$(sql_scalar "$new" "SELECT $(printf "$rows" "$new_schema" "" "$new_schema" "") FROM dual")
-event copy_ready db="$new" scn="$copy_scn"
-event promoted db="$new" scn="$copy_scn" src_rows="$src_rows" copy_rows="$copy_rows" # gate: db_copy_matches_source, window_exercised
-[[ -n $src_rows && $src_rows == "$copy_rows" ]] \
-  || die "copy $new_schema has ${copy_rows:-no} user+session rows, $src_schema had ${src_rows:-none} at SCN $copy_scn: not a copy of the copy point"
-
-# 6. Green on its own schema: the new version migrates it. Same copy point; the changelog count proves migration ran.
-before=$(sql_scalar "$new" "SELECT COUNT(*) FROM DATABASECHANGELOG")
+# 6. Green on its own DB: the new version migrates it. The changelog count proves the migration ran.
+before=$(db_changesets "$new")
 deploy_color "$idle" "$target" "$new" 1
-after=$(sql_scalar "$new" "SELECT COUNT(*) FROM DATABASECHANGELOG")
+after=$(db_changesets "$new")
 event migration db="$new" from="$from" to="$target" changesets_before="$before" changesets_after="$after"
 scripts/check-cluster.sh "$idle"
 
-# 7. Config on green's own schema before it takes traffic (maintenance stage only when asked).
+# 7. Config on green's own DB before it takes traffic (maintenance stage only when asked).
 scripts/config.sh online "$idle"
 [[ ${RUN_MAINTENANCE:-false} =~ ^(true|1)$ ]] && scripts/config.sh maintenance "$idle"
 
@@ -88,13 +55,13 @@ sleep "${DRAIN_SECONDS:-15}"
 scripts/replay.sh "$active" "$idle" "$copy_iso"
 event replay_done
 
-# 11. Unfreeze. 12. KEEP_OLD=true: old color + old schema stay up for scripts/rollback.sh (it reverse-replays green's
-#     logouts/creations and flips back). Otherwise the old color is scaled down; its schema stays as a last-resort copy.
+# 11. Unfreeze. 12. KEEP_OLD=true: old color + old DB stay up for scripts/rollback.sh (it reverse-replays green's
+#     logouts/creations and flips back). Otherwise the old color is scaled down; its DB stays as a last-resort copy.
 unfreeze
 trap - EXIT
 event window_end
 if [[ ${KEEP_OLD:-false} == true ]]; then
-  log "switched $active -> $idle ($src -> $new); kc-$active on schema $src kept running for rollback"; exit 0
+  log "switched $active -> $idle ($src -> $new); kc-$active on $src kept running for rollback"; exit 0
 fi
 save_logs "$active"
 kubectl -n "$NS" scale sts "kc-$active-keycloak" --replicas=0 >/dev/null

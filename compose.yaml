@@ -10,16 +10,16 @@ services:
     # `PROFILE=laptop docker compose run --rm launcher scripts/demo.sh all` (Jenkins: build parameter PROFILE=laptop).
     environment:
       PROFILE: ${PROFILE:-default}
-      # Oracle image selection (19.3 EE needs the Oracle registry and a pull secret). Compose passes only what is
-      # listed here, so an exported ORACLE_IMAGE would otherwise never reach the launcher.
-      ORACLE_IMAGE: ${ORACLE_IMAGE:-mohammedesafi/oracle-database:19.3.0-ee}
+      # postgres (default) or oracle (oracle/README.md); one cluster = one engine
+      DB_ENGINE: ${DB_ENGINE:-postgres}
+      # DB_ENGINE=oracle only. Compose passes only what is listed here; empty = oracle/db.sh picks the default (19.3
+      # community image, SID and memory by image; a fixed ORACLE_SID default here once broke the gvenzl image).
+      ORACLE_IMAGE: ${ORACLE_IMAGE:-}
       ORACLE_PULL_SECRET: ${ORACLE_PULL_SECRET:-}
       ORACLE_PULL_SECRET_FILE: ${ORACLE_PULL_SECRET_FILE:-}
-      # empty = scripts/lib/kc.sh picks it from the image (FREE for gvenzl oracle-free, else ORCLCDB). A fixed
-      # default here handed ORCLCDB to the gvenzl image, whose entrypoint and sqlplus follow ORACLE_SID.
       ORACLE_SID: ${ORACLE_SID:-}
-      ORACLE_MEMORY: ${ORACLE_MEMORY:-6Gi}
-      ORACLE_STORAGE: ${ORACLE_STORAGE:-20Gi}
+      ORACLE_MEMORY: ${ORACLE_MEMORY:-}
+      ORACLE_STORAGE: ${ORACLE_STORAGE:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/repo

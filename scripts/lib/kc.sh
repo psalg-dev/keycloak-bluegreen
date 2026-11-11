@@ -7,28 +7,14 @@ CHART=oci://registry-1.docker.io/bitnamicharts/keycloak
 CHART_VERSION=25.2.0
 KC_IMAGE=kc-bluegreen/keycloak
 
-# Oracle replaces CloudNativePG in this branch. The two blue/green "databases" are two schemas
-# (KC1, KC2) in one PDB; Keycloak's db-schema selects which one a color uses. One Oracle
-# instance keeps the demo on a 16 GB laptop possible and makes reset a schema drop, not a
-# database rebuild. 19c production shape (Data Guard / RAC / separate CDBs) is documented in
-# docs/oracle.md; the zero-downtime mechanism does not depend on it.
-DB_HOST=${DB_HOST:-oracle}
-DB_SERVICE=${DB_SERVICE:-FREEPDB1}
-ORACLE_IMAGE=${ORACLE_IMAGE:-mohammedesafi/oracle-database:19.3.0-ee} # community 19.3 EE; gvenzl Free alternative: gvenzl/oracle-free:23.26.3-slim
-ORACLE_PULL_SECRET=${ORACLE_PULL_SECRET:-}
-ORACLE_PULL_SECRET_FILE=${ORACLE_PULL_SECRET_FILE:-} # docker config.json; up.sh turns it into the k8s secret
-ORACLE_ADMIN_SECRET=${ORACLE_ADMIN_SECRET:-oracle-admin}
-ORACLE_DUMP_DIR=${ORACLE_DUMP_DIR:-/opt/oracle/oradata/dpdump}
-# gvenzl Free needs 4 GiB in-cluster (1 GiB /dev/shm + 3.0 GiB first-start extraction); the 19.3 DBCA run used 6 GiB.
-ORACLE_MEMORY=${ORACLE_MEMORY:-6Gi}
-ORACLE_STORAGE=${ORACLE_STORAGE:-20Gi}
-ORACLE_SGA_MB=${ORACLE_SGA_MB:-1024}
-ORACLE_PGA_MB=${ORACLE_PGA_MB:-512}
-if [[ $ORACLE_IMAGE == *oracle-free* ]]; then
-  ORACLE_SID=${ORACLE_SID:-FREE}
-else
-  ORACLE_SID=${ORACLE_SID:-ORCLCDB}
-fi
+# DB_ENGINE: postgres (default: CloudNativePG, scripts/lib/db-postgres.sh) or oracle (oracle/db.sh, oracle/README.md).
+# Both run the same switch scripts, load, gate and report; the engine file supplies the DB platform, create/delete,
+# the helm values and the lossy copy step (the interface is listed at the top of db-postgres.sh). A cluster is
+# brought up for ONE engine (ConfigMap kc-engine, check_profile).
+DB_ENGINE=${DB_ENGINE:-postgres}
+# where demo.sh files a finished case: out/<case>/ for postgres, out/<engine>/<case>/ otherwise (one report per engine)
+# shellcheck disable=SC2034 # read by scripts/demo.sh
+case $DB_ENGINE in postgres) OUT=out ;; *) OUT=out/$DB_ENGINE ;; esac
 
 # TAG (each script sets one; helpers here inherit the caller's) says what kind of work a line belongs to:
 # [deployment], [load test], [config], [database], [replay], [verification], ...
@@ -36,27 +22,26 @@ log() { printf '%s %s%s\n' "$(date -u +%FT%TZ)" "${TAG:+[$TAG] }" "$*" >&2; }
 die() { log "FAIL: $*"; exit 1; }
 
 # PROFILE: default = the demo as designed (prod shape: 3 zones, 3 Keycloak pods per color).
-# laptop = fits a 16 GB laptop (Docker VM ~13 GiB, gvenzl Free only): kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml
-# (2 pods/color, PDB 1, smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount
-# (check-cluster.sh compares them). Oracle is one instance in both profiles: 6 GiB for the default 19.3
-# image, 4 GiB for gvenzl Free. PROFILE=laptop is sized for Free only (preflight.sh refuses 19.3 there). Neither
-# profile's peak has been measured on Oracle; the preflight thresholds are estimates. Schemas KC1/KC2 are cheap,
-# the Oracle instance is the unit.
+# laptop = fits a 16 GB laptop: kind/cluster-laptop.yaml (2 workers) + helm/values-laptop.yaml (2 pods/color, PDB 1,
+# smaller heap), reasons in those files. KC_REPLICAS must equal the profile's helm replicaCount (check-cluster.sh
+# compares them). What the DB costs per profile is the engine's business (PG_INSTANCES, ORACLE_MEMORY, db_mem_need).
 # laptop k6: fewer logins/s (login VUs = rate x 25) and app VUs; refresh/logout VUs stay (cheap, the gate needs them).
 # NGINX_WORKERS: ingress-nginx defaults to one worker per CPU the node sees (= every host CPU); 2 carry this load.
 PROFILE=${PROFILE:-default}
 # shellcheck disable=SC2034 # read by the scripts that source this file
 case $PROFILE in
-  default) KC_REPLICAS=3 ORACLE_CPUS=1 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
-  laptop) KC_REPLICAS=2 ORACLE_CPUS=1 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
+  default) KC_REPLICAS=3 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS='' KIND_CONFIG=kind/cluster.yaml ;;
+  laptop) KC_REPLICAS=2 LOGIN_RATE_DEFAULT=2 APP_VUS_DEFAULT=3 NGINX_WORKERS=2 KIND_CONFIG=kind/cluster-laptop.yaml ;;
   *) die "unknown PROFILE '$PROFILE' (default|laptop)" ;;
 esac
 
 # check_profile: a cluster records its profile as node label kc-bluegreen/profile (kind/cluster-<profile>.yaml; no label
 # = default). Running one profile against a cluster made with another fails here, not deep inside a switch. Called where
 # the profile shapes cluster objects (up.sh, create_db, deploy_color, switch-lossy, rollback), not in kube_connect: the
-# security jobs are profile-agnostic.
+# security jobs are profile-agnostic. Same for the engine: up.sh records it in ConfigMap kc-engine (none yet = fine).
 check_profile() {
+  local e; e=$(kubectl -n "$NS" get configmap kc-engine -o 'jsonpath={.data.engine}' 2>/dev/null || true)
+  [[ -z $e || $e == "$DB_ENGINE" ]] || die "cluster $CLUSTER was brought up with DB_ENGINE=$e, this run has DB_ENGINE=$DB_ENGINE (use DB_ENGINE=$e, or scripts/down.sh and bring it up again)"
   local p; p=$(kubectl get node "$CLUSTER-control-plane" -o json | jq -r '.metadata.labels["kc-bluegreen/profile"] // "default"') \
     || die "cannot read node $CLUSTER-control-plane"
   [[ $p == "$PROFILE" ]] || die "cluster $CLUSTER was created with PROFILE=$p, this run has PROFILE=$PROFILE (use PROFILE=$p or recreate the cluster)"
@@ -96,16 +81,16 @@ kube_connect() {
   if cmp -s "$tmp" ~/.kube/config; then rm -f "$tmp"; else mv -f "$tmp" ~/.kube/config; fi
 }
 
-image_tag() { echo "$1-p${2:-1}"; } # <kc_version> [provider_version]
+image_tag() { echo "$1-p${2:-1}$(db_image_suffix)"; } # <kc_version> [provider_version]; -ora = built for Oracle
 
 # build_opts <kc_major>: `kc.sh build` options. 26 = the Dockerfile default. On 25 cache/cache-stack are runtime
 # options (build rejects them, exit 2; the chart env sets them) and there is no stateless/jdbc-ping. User sessions
 # reach the DB only with the preview feature persistent-user-sessions, which must be on from the first start.
-# --db=oracle is baked here; the Oracle JDBC driver (ojdbc17 + orai18n) is added in images/keycloak/Dockerfile.
+# --db comes from the engine (db_build_opt); the Oracle JDBC driver is added by the Dockerfile for DB_ENGINE=oracle.
 build_opts() {
   case $1 in
-    25) echo "--db=oracle --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions" ;;
-    26) echo "--db=oracle --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=stateless" ;;
+    25) echo "$(db_build_opt) --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=persistent-user-sessions" ;;
+    26) echo "$(db_build_opt) --cache=ispn --cache-stack=jdbc-ping --health-enabled=true --metrics-enabled=true --http-relative-path=/keycloak --features=stateless" ;;
     *) die "no build options for Keycloak major $1" ;;
   esac
 }
@@ -116,7 +101,7 @@ build_opts() {
 build_image() {
   local TAG=build
   local tag opts inputs; tag=$(image_tag "$1" "${2:-1}"); opts=$(build_opts "${1%%.*}")
-  inputs=$( { printf '%s\n' "$1" "$2" "$opts"; find images/keycloak providers/pom.xml providers/src themes -type f -print0 \
+  inputs=$( { printf '%s\n' "$1" "$2" "$opts" "$DB_ENGINE"; find images/keycloak providers/pom.xml providers/src themes -type f -print0 \
     | sort -z | xargs -0 sha256sum; } | sha256sum | cut -c1-16)
   if [[ $(docker image inspect -f '{{index .Config.Labels "kc-bluegreen.inputs"}}' "$KC_IMAGE:$tag" 2>/dev/null) == "$inputs" ]]; then
     log "image $KC_IMAGE:$tag is up to date (inputs $inputs): no rebuild"
@@ -124,163 +109,34 @@ build_image() {
     log "building image $KC_IMAGE:$tag (inputs $inputs; provider jar + tests + kc.sh build; a new version takes minutes)"
     # stream the build log with a prefix (the launcher is Alpine/BusyBox: no GNU `sed -u` or `grep --line-buffered`)
     docker build --progress=plain --build-arg "KC_VERSION=$1" --build-arg "KC_MAJOR=${1%%.*}" --build-arg "KC_BUILD_OPTS=$opts" \
-      --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" --label "kc-bluegreen.inputs=$inputs" \
+      --build-arg "DB_ENGINE=$DB_ENGINE" --build-arg "PROVIDER_VERSION=${2:-1}" --build-arg "THEME_VERSION=${2:-1}" --label "kc-bluegreen.inputs=$inputs" \
       -t "$KC_IMAGE:$tag" -f images/keycloak/Dockerfile . 2>&1 | sed 's/^/  docker /' >&2
   fi
   kind load docker-image --name "$CLUSTER" "$KC_IMAGE:$tag" >/dev/null 2>&1 || die "kind load $KC_IMAGE:$tag" # skips nodes that have it
   log "image $KC_IMAGE:$tag loaded"
 }
 
-# ensure_secret <name> <key> [bytes]: random value, created once, never printed. Oracle 19c limits passwords to 30
-# characters, so the Oracle admin secret uses 12 bytes (24 hex); Keycloak secrets keep the default 24 bytes.
+# ensure_secret <name> <key> [bytes]: random value, created once, never printed. Default 24 bytes (48 hex); Oracle 19c
+# limits passwords to 30 characters, so its admin secret asks for 12.
 ensure_secret() {
   kubectl -n "$NS" get secret "$1" >/dev/null 2>&1 && return
   kubectl -n "$NS" create secret generic "$1" --from-literal="$2=$(openssl rand -hex "${3:-24}")" >/dev/null
-}
-
-# db_schema <name>: the demo's logical DB names are kc1/kc2; Oracle schemas are upper-case.
-db_schema() {
-  [[ $1 =~ ^kc[0-9]+$ ]] || die "invalid db name '$1' (expected kc<number>)"
-  printf '%s' "${1^^}"
-}
-
-# oracle_pod: the one Oracle StatefulSet pod (k8s/oracle/oracle.yaml.tpl)
-oracle_pod() {
-  kubectl -n "$NS" get pod -l app=oracle -o jsonpath='{.items[0].metadata.name}'
-}
-
-oracle_ready() {
-  kubectl -n "$NS" rollout status statefulset/oracle --timeout=1800s >/dev/null
-  local pod n; pod=$(oracle_pod)
-  [[ -n $pod ]] || die "oracle: no pod after rollout"
-  kubectl -n "$NS" wait --for=condition=Ready "pod/$pod" --timeout=1800s >/dev/null
-  # A plain `sqlplus / as sysdba` succeeds while DBCA is still building the database (and the listener is already up),
-  # so the pod can be Ready before the PDB exists. Wait for the PDB itself before creating schemas.
-  for _ in $(seq 360); do
-    n=$(sql_root "SELECT COUNT(*) FROM V\$PDBS WHERE NAME = '$DB_SERVICE' AND OPEN_MODE = 'READ WRITE';" \
-      | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
-    [[ ${n:-0} -gt 0 ]] && return 0
-    sleep 5
-  done
-  die "oracle: PDB $DB_SERVICE did not open read-write within 30 min"
-}
-
-# sql_root <sql>: SQL in CDB$ROOT (before the PDB exists). Used only to wait for the PDB to open.
-# NUMWIDTH 20 (here and in sql_admin): the default 10 prints an SCN >= 1e10 as 1.2346E+10, which sql_scalar drops.
-sql_root() {
-  local pod; pod=$(oracle_pod)
-  [[ -n $pod ]] || die "oracle pod not running"
-  printf '%s\n' \
-    "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
-    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON NUMWIDTH 20" \
-    "$1" \
-    "exit;" \
-    | kubectl -n "$NS" exec -i "$pod" -- sqlplus -s / as sysdba
-}
-
-# sql_admin <sql>: run SQL in the Keycloak PDB as SYSDBA through stdin (no quoting inside the pod, no password in
-# argv). Used for schema lifecycle and instrumentation only; Keycloak connects as its own schema user.
-sql_admin() {
-  local pod; pod=$(oracle_pod)
-  [[ -n $pod ]] || die "oracle pod not running"
-  printf '%s\n' \
-    "WHENEVER SQLERROR EXIT SQL.SQLCODE" \
-    "SET HEADING OFF FEEDBACK OFF PAGESIZE 0 LINESIZE 32767 TRIMSPOOL ON NUMWIDTH 20" \
-    "ALTER SESSION SET CONTAINER = $DB_SERVICE;" \
-    "$1" \
-    "exit;" \
-    | kubectl -n "$NS" exec -i "$pod" -- sqlplus -s / as sysdba
-}
-
-# sql_db <db> <sql>: SQL in that schema. The SYSDBA session can read any schema, so the password never leaves its Secret.
-# SQL*Plus needs a statement terminator before the closing `exit`; callers pass a bare SELECT, so add one here.
-sql_db() {
-  local schema sql; schema=$(db_schema "$1"); sql=${2%;}
-  sql_admin "ALTER SESSION SET CURRENT_SCHEMA = $schema;
-$sql;"
-}
-
-# sql_scalar <db> <sql>: the one numeric/hex value a scalar SELECT returns (SCN, count), ignoring SQL*Plus noise.
-sql_scalar() {
-  sql_db "$1" "$2" | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9A-Fa-f]+$/ { v = $1 } END { print v }'
-}
-
-# drop_schema <SCHEMA>: kill any sessions still connected to the schema, then DROP USER CASCADE with a short retry.
-# Helm uninstall returns before every Keycloak connection is gone; Oracle refuses to drop a connected user.
-drop_schema() {
-  local schema=$1 s
-  for _ in $(seq 30); do
-    for s in $(sql_admin "SELECT sid || ',' || serial# FROM v\$session WHERE username = '$schema';" | tr -d '\r' \
-      | awk '/^[0-9]+,[0-9]+$/ { print }'); do
-      sql_admin "ALTER SYSTEM KILL SESSION '$s' IMMEDIATE;" >/dev/null 2>&1 || true
-    done
-    if sql_admin "DROP USER $schema CASCADE;" >/dev/null 2>&1; then return 0; fi
-    sleep 2
-  done
-  die "could not drop schema $schema (sessions kept reconnecting?)"
-}
-
-# drop_db <name>: remove one schema and its Secret, if present. Used before a lossy switch so a retry after a failed
-# Data Pump import starts from an empty target (create_db alone would reuse the half-written schema).
-drop_db() {
-  local TAG=database schema count
-  schema=$(db_schema "$1")
-  [[ -n $(oracle_pod) ]] || return 0
-  count=$(sql_admin "SELECT COUNT(*) FROM DBA_USERS WHERE USERNAME = '$schema';" | tr -d '\r' \
-    | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
-  if [[ ${count:-0} != 0 ]]; then
-    log "dropping Oracle schema $schema"
-    drop_schema "$schema"
-  fi
-  kubectl -n "$NS" delete secret "$1-app" --ignore-not-found >/dev/null
-}
-
-# create_db <name>: an Oracle schema/user, waits until it can be used. The Oracle instance itself is created once by
-# up.sh; reset drops and recreates schemas, which is why a demo case no longer rebuilds a database.
-create_db() {
-  local TAG=database name=$1 schema count pass
-  schema=$(db_schema "$name")
-  check_profile
-  [[ -n $(oracle_pod) ]] || die "oracle pod not running (run scripts/up.sh first)"
-  if kubectl -n "$NS" get secret "$name-app" >/dev/null 2>&1; then
-    log "db $name ($schema) already exists"
-    return
-  fi
-  pass="Kc$(openssl rand -hex 12)" # 26 chars: Oracle 19c's password limit is 30
-  count=$(sql_admin "SELECT COUNT(*) FROM DBA_USERS WHERE USERNAME = '$schema';" | tr -d '\r' | awk 'NF == 1 && $1 ~ /^[0-9]+$/ { v = $1 } END { print v }')
-  if [[ ${count:-0} == 0 ]]; then
-    log "creating Oracle schema $schema (user + quota; no CNPG cluster)"
-    sql_admin "CREATE USER $schema IDENTIFIED BY \"$pass\" DEFAULT TABLESPACE USERS QUOTA UNLIMITED ON USERS;" >/dev/null
-  else
-    log "Oracle schema $schema exists without its Secret: resetting its password"
-    sql_admin "ALTER USER $schema IDENTIFIED BY \"$pass\" ACCOUNT UNLOCK;" >/dev/null
-  fi
-  sql_admin "GRANT CONNECT, RESOURCE, CREATE VIEW, CREATE SYNONYM TO $schema;
-GRANT SELECT ON SYS.DBA_RECYCLEBIN TO $schema;
-ALTER USER $schema QUOTA UNLIMITED ON USERS;" >/dev/null
-  kubectl -n "$NS" create secret generic "$name-app" --from-literal=username="$schema" --from-literal=password="$pass" >/dev/null
-  log "db $name ready (Oracle schema $schema in $DB_SERVICE)"
 }
 
 # deploy_color <color> <kc_version> <db> [provider_version]
 deploy_color() {
   local color=$1 version=$2 db=$3 tag; tag=$(image_tag "$2" "${4:-1}")
   local overlay=(); [[ $version == 25.* ]] && overlay=(-f helm/values-kc25.yaml)
-  [[ $PROFILE == default ]] || overlay+=(-f "helm/values-$PROFILE.yaml") # last: wins over common + kc25
-  local schema; schema=$(db_schema "$db")
   check_profile
-  log "deploying kc-$color @ $version ($tag) on Oracle schema $schema, waiting for $KC_REPLICAS Ready pods (helm --wait)"
+  db_helm_args "$db" "$version" # engine values + --set: after common/kc25 (the Oracle overlay replaces their env list)
+  local last=(); [[ $PROFILE == default ]] || last=(-f "helm/values-$PROFILE.yaml") # last: wins over everything
+  log "deploying kc-$color @ $version ($tag) on $db ($DB_ENGINE), waiting for $KC_REPLICAS Ready pods (helm --wait)"
   helm upgrade --install "kc-$color" "$CHART" --version "$CHART_VERSION" -n "$NS" \
-    -f helm/values-common.yaml "${overlay[@]}" \
+    -f helm/values-common.yaml "${overlay[@]}" "${DB_HELM_ARGS[@]}" "${last[@]}" \
     --set "image.tag=$tag" \
-    --set "externalDatabase.host=$DB_HOST" \
-    --set "externalDatabase.port=1521" \
-    --set "externalDatabase.database=$DB_SERVICE" \
-    --set "externalDatabase.schema=$schema" \
-    --set "externalDatabase.existingSecret=$db-app" \
     --wait --timeout 15m >/dev/null
-  scripts/check-db.sh "$db" # Keycloak Ready is not proof it used the schema we intended
-  log "kc-$color @ $version on Oracle schema $schema ready"
+  db_verify "$db"
+  log "kc-$color @ $version on $db ready"
 }
 
 # set_active <color> <db> <kc_version>: flip the switch, record state (the previous one too, for rollback.sh)
@@ -410,20 +266,6 @@ unfreeze() {
   log "unfrozen (kc-gate -> kc-$(state activeColor))"
 }
 
-# delete_dbs: drop every demo schema (KC1, KC2, ...) and its Secret. The Oracle instance and its PVC stay: startup
-# costs minutes, a schema drop costs seconds. Data Pump dumps are removed too, unless one is being kept for evidence.
-delete_dbs() {
-  local TAG=database s
-  [[ -n $(oracle_pod) ]] || { log "no Oracle pod: nothing to delete"; return; }
-  for s in $(sql_admin "SELECT USERNAME FROM DBA_USERS WHERE REGEXP_LIKE(USERNAME, '^KC[0-9]+$') ORDER BY USERNAME;" \
-    | tr -d '\r' | awk '/^KC[0-9]+$/ { print }'); do
-    log "dropping Oracle schema $s"
-    drop_schema "$s"
-    kubectl -n "$NS" delete secret "${s,,}-app" --ignore-not-found >/dev/null
-  done
-  kubectl -n "$NS" exec "$(oracle_pod)" -- bash -c "rm -f '$ORACLE_DUMP_DIR'/*.dmp '$ORACLE_DUMP_DIR'/*.log" 2>/dev/null || true
-}
-
 # admin_direct_start <color> / admin_direct_stop: like admin_api, but straight to one color's Service via a
 # port-forward (kubelet path, not subject to the NetworkPolicy). Needed before a switch, when ingress still points at
 # the other color. Sets ADMIN_BASE; admin_api uses it when set.
@@ -464,3 +306,14 @@ progress_ticker() {
   trap - ERR
   while sleep 30; do s=$((s + 30)); log "$1 +${s}s | $(k6_status)"; done
 }
+
+# The engine: DB platform, create/delete, helm values, lossy copy (interface: top of db-postgres.sh). Last, so the
+# engine files can use everything above.
+case $DB_ENGINE in postgres | oracle) ;; *) die "unknown DB_ENGINE '$DB_ENGINE' (postgres|oracle)" ;; esac
+if [[ $DB_ENGINE == oracle ]]; then
+  # shellcheck source=oracle/db.sh
+  . "${BASH_SOURCE[0]%/*}/../../oracle/db.sh"
+else
+  # shellcheck source=scripts/lib/db-postgres.sh
+  . "${BASH_SOURCE[0]%/*}/db-postgres.sh"
+fi

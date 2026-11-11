@@ -1,7 +1,7 @@
 # One Oracle instance for the demo. The blue/green "databases" are schemas in FREEPDB1, created by
-# scripts/lib/kc.sh create_db; the instance is the platform, like the CNPG operator was.
-# Image: ORACLE_IMAGE (scripts/lib/kc.sh; default = the Docker Hub 19.3 EE community build; alternatives: gvenzl Free,
-# or the official registry image with ORACLE_PULL_SECRET; docs/oracle.md). The SQL and cutover path are the same.
+# oracle/db.sh create_db; the instance is the platform, like the CNPG operator is for DB_ENGINE=postgres.
+# Image: ORACLE_IMAGE (oracle/db.sh; default = the Docker Hub 19.3 EE community build; alternatives: gvenzl Free,
+# or the official registry image with ORACLE_PULL_SECRET; oracle/README.md). The SQL and cutover path are the same.
 apiVersion: v1
 kind: Service
 metadata:

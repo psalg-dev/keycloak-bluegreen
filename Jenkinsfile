@@ -4,7 +4,7 @@
 def phase(String p) {
   sh """#!/usr/bin/env bash
 set -euo pipefail
-export RUN_MAINTENANCE PROFILE
+export RUN_MAINTENANCE PROFILE DB_ENGINE
 scripts/demo.sh "\$CASE" ${p}
 """
 }
@@ -103,12 +103,14 @@ if kubectl -n load get job k6 >/dev/null 2>&1; then scripts/load.sh stop || true
 set -euo pipefail
 start=$((BUILD_START_MS / 1000))
 # build/commit for the case dirs THIS build wrote (k6.jsonl newer than the build start); older dirs keep theirs
-for k in out/*/k6.jsonl; do
+for k in out/*/k6.jsonl out/*/*/k6.jsonl; do
   [[ -f $k && $(stat -c %Y "$k") -ge $start ]] || continue
   jq -n --arg build "$BUILD_NUMBER" --arg commit "${GIT_COMMIT:-}" --arg url "${BUILD_URL:-}" \\
     '{build: $build, commit: $commit, url: $url}' > "${k%/k6.jsonl}/meta.json"
 done
 scripts/report.sh
+# one report per engine: DB_ENGINE=oracle cases live in out/oracle/<case>/
+if compgen -G 'out/oracle/*/k6.jsonl' >/dev/null; then scripts/report.sh out/oracle; fi
 ''')
           if (rc != 0) { unstable("scripts/report.sh failed (exit ${rc})") }
         }
