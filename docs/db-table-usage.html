@@ -32,8 +32,8 @@ button[aria-pressed=true] { background:var(--card); border-color:var(--ink3); }
 (2026-11-11 21:05 UTC, default profile, k6 load). Click a category to filter the tables.</p>
 
 <div style="display:flex;gap:8px;flex-wrap:wrap">
-  <button id="b1">pg-2: traffic only</button>
-  <button id="b0">pg-1: install, seed and load</button>
+  <button id="b1"><span class="sq" style="background:#1baf7a;border-radius:50%"></span>green: pg-2 (traffic only)</button>
+  <button id="b0"><span class="sq" style="background:#2a78d6;border-radius:50%"></span>blue: pg-1 (install, seed and load)</button>
 </div>
 <div id="cards"></div>
 <div class="legend">
@@ -45,9 +45,9 @@ button[aria-pressed=true] { background:var(--card); border-color:var(--ink3); }
 
 <h1 style="margin-top:24px">How to read it</h1>
 <ul>
-  <li><b>pg-1</b> (blue, Keycloak 26.7.5): counters since the database was created, so schema install, config-cli,
+  <li><b>blue: pg-1</b> (Keycloak 26.7.5): counters since the database was created, so schema install, config-cli,
     user seeding and load. Writes are skewed by the seeding.</li>
-  <li><b>pg-2</b> (green's database, Keycloak 26.8.1): counters since the copy, so mostly traffic, plus green's schema
+  <li><b>green: pg-2</b> (Keycloak 26.8.1): counters since the copy, so mostly traffic, plus green's schema
     upgrade (27 changelog rows). Closer to a steady state. That the copy starts the counters at zero is assumed, not checked.</li>
   <li><b>Reads</b> are scan counts, not rows. Keycloak caches realms, clients and users in Infinispan, so config reads
     are understated.</li>
