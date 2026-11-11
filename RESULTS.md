@@ -59,7 +59,8 @@ What the numbers mean:
 The numbers above were measured with the replay reading the event listener's log lines. On the branch
 `replay-db-diff` the replay reads the old color's database instead (no log to lose). Postgres builds #21-#24:
 `minor`, `major`, `minor-rollback` PASS, plus a run with planted sessions (logout and token revocation on each
-color: 15 of 15 checks). Lossy window 115-135 s, lossy rollback 56 s: the first replay pass is slower per new user.
+color: 15 of 15 checks). Lossy window 115-135 s; the first replay pass took 15-21 s for 29-44 new users, the same
+order as the log replay (15 s for 34). The lossy rollback took 56 s (39 s before); why was not investigated.
 Not run on Oracle, so not merged. Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
 
 ## Caveats

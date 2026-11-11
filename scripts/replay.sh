@@ -29,7 +29,7 @@ apply() {
   [[ $code == 2?? || $code == 404 ]] || die "replay $1: $2 $3 -> HTTP ${code:-none}"
 }
 import_user() { # user line -> partialImport of that user with its original id (SKIP if the id or username exists)
-  jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled: true, emailVerified: true,
+  jq '{ifResourceExists: "SKIP", users: [{id: .userId, username, email, firstName, lastName, enabled, emailVerified,
        attributes, federatedIdentities, realmRoles, groups}]}' <<<"$1" \
     | admin_api POST /realms/demo/partialImport --data-binary @- >/dev/null || die "replay user $(jq -r .username <<<"$1")"
 }
@@ -42,7 +42,9 @@ trap 'admin_direct_stop; rm -rf "$d"' EXIT
 admin_direct_start "$from"
 realm_id=$(admin_api GET /realms/demo | jq -r .id)
 [[ $realm_id =~ ^[A-Za-z0-9-]+$ ]] || die "replay: realm id '$realm_id' is not safe to put into SQL"
-ids() { db_rows "$1" "select id from user_entity where realm_id = '$realm_id'" | sort; }
+# not service-account users: they belong to a client, and clients are not replayed (one created on the new color in a
+# rollback hold would come back as a user without its client)
+ids() { db_rows "$1" "select id from user_entity where realm_id = '$realm_id' and service_account_client_link is null" | sort; }
 ids "$from_db" > "$d/from_ids"; ids "$to_db" > "$d/to_ids"
 [[ -s $d/to_ids ]] || die "replay: no users of realm demo in $to_db: broken read"
 : > "$d/users"
@@ -51,7 +53,7 @@ for id in $(comm -23 "$d/from_ids" "$d/to_ids"); do
   jq -c -n --argjson u "$(admin_api GET "$u")" --argjson f "$(admin_api GET "$u/federated-identity")" \
     --argjson r "$(admin_api GET "$u/role-mappings/realm")" --argjson g "$(admin_api GET "$u/groups")" \
     '{userId: $u.id, username: $u.username, email: $u.email, firstName: $u.firstName, lastName: $u.lastName,
-      attributes: ($u.attributes // {}), federatedIdentities: $f, realmRoles: [$r[].name], groups: [$g[].path]}' >> "$d/users"
+      enabled: $u.enabled, emailVerified: $u.emailVerified, attributes: ($u.attributes // {}), federatedIdentities: $f, realmRoles: [$r[].name], groups: [$g[].path]}' >> "$d/users"
 done
 admin_direct_stop
 

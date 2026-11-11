@@ -15,7 +15,7 @@ auth server, `hostname-strict=false` behind several ingresses.
 - Jenkins in compose, running as root with `docker.sock` (`compose.yaml:17-37`).
 - A demo CA and random k8s Secrets (`scripts/certs.sh`, `scripts/lib/kc.sh:72-76`).
 - CNPG with 2 Gi volumes and no backups; Oracle: one 20 Gi PVC and no backups (`oracle/oracle.yaml.tpl`).
-- The replay source: `kubectl logs` of pod stdout (`scripts/replay.sh:16-20`).
+- The replay source was `kubectl logs` of pod stdout until 2026-11-11; now the old color's DB (section 2.3).
 
 **Biggest gaps (ranked)**
 1. **The replay source: fixed on Postgres, open on Oracle (2026-11-11).** The replay used to read the event
@@ -197,12 +197,15 @@ What stays open:
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
-- **Cost per new user**: 4 admin calls on blue + 1 import on green. Roughly 0.4 s per user here (from the stage offsets, not timed); it sits in the lossy
-  window (first pass) and in the rollback. Fine for tens of users per window, batch it for more.
+- **Cost per new user**: 4 admin calls on blue + 1 import on green. The first pass took 15-21 s for 29-44 new users
+  (console timestamps, builds #21-#23), the same order as the log replay (15 s for 34); it sits in the lossy window.
+  Batch it if a window carries hundreds. The lossy rollback took 56 s against 39 s before: not investigated.
 - **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it once the Oracle
   run has passed, or keep it as an audit trail.
 - k6 barely exercises the session diff (3-4 sessions forward, 0 on the rollback per run): the planted-session check
   was a one-off manual script (not in the repo), not part of the gate.
+- Token revocation with two clients was measured on 26.8.1 only, not on 26.7.5 or 25.0.6 as the old color.
+- Service-account users are not replayed (clients are not either).
 - Only realm `demo` is replayed. Offline sessions (`offline_flag = 1`) are not.
 
 **Window length on a large DB**
