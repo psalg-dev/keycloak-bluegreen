@@ -91,7 +91,8 @@ db_copy_cut() {
     [[ $(psql_db "$new" "select pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn") == t ]] && break; sleep 1
   done
   # measured on the replica just before the promote: the gate's db_copy_matches_source reads these two fields
-  replay=$(psql_db "$new" "select pg_last_wal_replay_lsn() || ' ' || (pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn)")
+  # left(..., 1): a boolean concatenated to text is 'true'/'false', not psql's t/f (first live run died here, caught up)
+  replay=$(psql_db "$new" "select pg_last_wal_replay_lsn() || ' ' || left((pg_last_wal_replay_lsn() >= '$lsn'::pg_lsn)::text, 1)")
   [[ ${replay#* } == t ]] || die "$new never caught up to $lsn (replayed ${replay% *})"
 
   # Promote. From here blue's writes reach only $src (lost unless replayed).
