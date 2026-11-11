@@ -198,7 +198,11 @@ admin_api() {
     local ip; ip=$(docker inspect -f '{{.NetworkSettings.Networks.kind.IPAddress}}' "$CLUSTER-control-plane")
     base=https://kc-net1.localtest.me/keycloak c=(curl -sf --cacert "$CA_FILE" --resolve "kc-net1.localtest.me:443:$ip")
   fi
-  if [[ -z ${ADMIN_TOKEN:-} ]]; then
+  # The token is cached, but only a call made in THIS shell can store it: `x=$(admin_api ...)` runs in a subshell and
+  # would fetch the secret and a token on every call (~0.2 s each: 64 s to purge 287 sessions). admin_direct_start
+  # therefore fetches one up front; it is renewed after 30 s (the master realm's tokens live 60 s).
+  if [[ -z ${ADMIN_TOKEN:-} || $((SECONDS - ${ADMIN_TOKEN_AT:-0})) -gt 30 ]]; then
+    ADMIN_TOKEN_AT=$SECONDS
     ADMIN_TOKEN=$("${c[@]}" -d grant_type=client_credentials -d client_id=config-cli \
       --data-urlencode "client_secret=$(kubectl -n "$NS" get secret kc-config-cli -o jsonpath='{.data.secret}' | base64 -d)" \
       "$base/realms/master/protocol/openid-connect/token" | jq -r .access_token) || die "admin token"
@@ -274,7 +278,10 @@ admin_direct_start() {
   kubectl -n "$NS" port-forward "svc/kc-$1-keycloak" "$port:80" >/dev/null 2>&1 &
   ADMIN_PF=$!
   ADMIN_BASE=http://127.0.0.1:$port/keycloak ADMIN_TOKEN=
-  local _; for _ in $(seq 30); do curl -sf "$ADMIN_BASE/realms/master" >/dev/null && return; sleep 1; done
+  local _; for _ in $(seq 30); do
+    if curl -sf "$ADMIN_BASE/realms/master" >/dev/null; then admin_api GET /realms/master >/dev/null; return; fi # + the token
+    sleep 1
+  done
   die "port-forward to kc-$1 failed"
 }
 admin_direct_stop() { kill "${ADMIN_PF:-}" 2>/dev/null || true; unset ADMIN_BASE ADMIN_PF; ADMIN_TOKEN=; }

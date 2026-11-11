@@ -42,11 +42,7 @@ trap 'admin_direct_stop; rm -rf "$d"' EXIT
 #    C|sid|client|timestamp. Not service-account users: they belong to a client, and clients are not replayed (one
 #    created on the new color in a rollback hold would come back as a user without its client).
 admin_direct_start "$from"
-# NOT in $(...): admin_api caches its token in ADMIN_TOKEN, and a command substitution is a subshell that forgets it,
-# so every later call would fetch the client secret and a new token again (most of a call's ~0.2 s).
-# ponytail: one token per color and pass; a pass longer than the token's lifespan dies on a 401 (fails closed, rerun).
-admin_api GET /realms/demo > "$d/realm"
-realm_id=$(jq -r .id "$d/realm")
+realm_id=$(admin_api GET /realms/demo | jq -r .id)
 [[ $realm_id =~ ^[A-Za-z0-9-]+$ ]] || die "replay: realm id '$realm_id' is not safe to put into SQL"
 read_db() { # <db> <prefix>: -> <prefix>_ids, _us, _cs; dies on anything that is not a tagged row, or on no users
   db_rows "$1" "select 'U|' || id from user_entity where realm_id = '$realm_id' and service_account_client_link is null
@@ -89,7 +85,6 @@ replay_session_diff "$d/to_us" "$d/from_us" "$d/to_cs" "$d/from_cs" "$limit_s" "
 
 # 4. Apply on <to>: the sessions, then the users, 200 per partialImport (one request per user cost ~0.2 s each).
 admin_direct_start "$to"
-admin_api GET /realms/demo > /dev/null # token for this color, kept (see above)
 logouts=0 users=0 repaired=()
 while read -r sid; do
   apply logout DELETE "/realms/demo/sessions/$sid"
