@@ -203,13 +203,16 @@ What stays open:
   parallel, one `partialImport` per 200 users and one token per color: 5 s for 53 users and 5 sessions forward, 5 s for
   65 users on the rollback. Lossy window 128 s, lossy rollback 41 s: back to what the log replay had (124-142 s, 40 s).
   Postgres `minor-rollback` #30 (`428fe77`, planted sessions 15 of 15): lossy window 105 s, lossy rollback 20 s. The
-  rollback's cost had been the purge (64 s for 287 sessions in #29, every admin call fetching a new token); the
-  token is now fetched once per port-forward and renewed after 30 s (7 s for 223 sessions). `428fe77` has not run on
+  rollback's cost had been the purge (64 s for 287 sessions in #29; 22-26 s in earlier runs). Every admin call
+  fetched a new token, which is fixed (one per port-forward, renewed after 30 s: 7 s for 223 sessions); why #29 took
+  64 s rather than the usual 22-26 s is not explained. `428fe77` has not run on
   Oracle (the change is in the shared admin helper, not in engine code).
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
 - **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it, or keep it as an audit trail.
+- **The repair of a post-flip duplicate through the batched import has not occurred in a run** since the batching
+  (0 repairs in #28-#30). The response it relies on was read live (26.7.5), and a skip it cannot name fails the replay.
 - k6 barely exercises the session diff (3-4 sessions forward, 0 on the rollback per run): the planted-session check
   was a one-off manual script (not in the repo), not part of the gate.
 - Token revocation with two clients was measured on 26.8.1 only, not on 26.7.5 or 25.0.6 as the old color.

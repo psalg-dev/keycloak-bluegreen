@@ -98,6 +98,10 @@ for b in "$d"/batch.*; do
     || die "replay: partialImport of $(wc -l < "$b") users on $to failed"
   n=$(wc -l < "$b")
   [[ $(jq -r '(.added // 0) + (.skipped // 0)' "$b.res") -eq $n ]] || die "replay: partialImport on $to answered for fewer than the $n users sent"
+  # every skip must be named below, or a duplicate would go unrepaired and still count as replayed
+  # (shape read live on 26.7.5: {"action":"SKIPPED","resourceType":"USER","resourceName":<username>,"id":<the other id>})
+  [[ $(jq -r '[.results[]? | select(.action == "SKIPPED" and .resourceType == "USER")] | length' "$b.res") -eq $(jq -r '.skipped // 0' "$b.res") ]] \
+    || die "replay: partialImport on $to skipped users it does not name: cannot repair them"
   # SKIPPED = <to> already has that username under ANOTHER id (ids <to> has are not in the batch): the person logged
   # in on <to> after the flip, before this replay, and <to> made a new user (laptop build #28, rollback). Created
   # after the limit, that duplicate is the race's: delete it and import the original, so the first-issued `sub` wins
