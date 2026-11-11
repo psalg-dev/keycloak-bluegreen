@@ -183,8 +183,9 @@ Builds **#1** (`patch`), **#4** (`patch-rollback`) on `bf7e313`; **#6** (`minor`
 Memory, all five cases (docker stats every 15 s): **12.65 GiB** peak for the KinD nodes, **14.03 GiB** with Jenkins
 (rollback phase of `minor-rollback`: both colors and both Postgres clusters up).
 
-The lossy cases carry more requests than the shared ones because the Keycloak image was loaded into the fresh cluster
-inside the switch stage, before the copy point (about six minutes of extra load, none of it in the lossy window).
+The lossy cases carry more requests than on Oracle: the switch stage first builds green's Postgres cluster as a
+streaming replica (4 to 5.5 minutes from stage start to `replica_ready` in these runs), under load and before the copy
+point, so none of it is in the lossy window.
 
 ### Oracle 19.3
 
