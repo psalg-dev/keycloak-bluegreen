@@ -7,47 +7,14 @@ Scope: what it would take to run this repo's approach in an enterprise environme
 Bitnami chart, Jenkins, ingress-nginx, keycloak-config-cli, a custom provider JAR, brokering to a legacy Spring
 auth server, `hostname-strict=false` behind several ingresses.
 
-> **Branch `oracle-19c`:** the demo now uses Oracle instead of CNPG/Postgres. The DB-specific
-> sections below (notably 4.1, the copy step, backups/PITR and DB metrics) describe the
-> Postgres baseline. The Oracle route, its 19.3/Free images and its production gaps
-> (Data Guard/RAC, RMAN, AWR, refreshable PDB clone) are in
-> [docs/oracle.md](docs/oracle.md). Where this document says "CNPG", read "Oracle instance"
-> for this branch; the app-level readiness findings are unchanged.
+> **Two engines.** The DB-specific sections below (notably 4.1, the copy step, backups/PITR and DB metrics) describe
+> the default engine, Postgres/CNPG. For `DB_ENGINE=oracle` the route and its production gaps (Data Guard/RAC, RMAN,
+> AWR, refreshable PDB clone) are in [oracle/README.md](../oracle/README.md); the app-level findings are the same.
 
-Conventions:
-- **Fact**: backed by a repo path:line, a worklog entry or a URL.
-  Worklogs are in `C:\dev\_worklogs\keycloak-bluegreen\`. `wl:<name>` means `2026-11-0x-<name>.md`. For example,
-  `wl:slice5-6` = `2026-11-02-slice5-6-switches.md`, `wl:slice1b-2` = `2026-11-02-slice1b-2-idp-config.md`.
-  "ai-memory <id>" = a fact in the project's shared memory store.
-- **Rec**: a recommendation.
-- **Open**: an open question that needs an answer from the team or a test.
-- `[verified]` / `[assumed]` carry the same meaning as in the worklogs.
-
----
-
-## 1. Executive summary
-
-**What transfers as-is**
-- The switch is a Service selector flip (`k8s/edge/kc-active.yaml`, `scripts/lib/kc.sh:102-113`). It does not depend
-  on the edge, the cloud LB or the chart. It works the same behind any ingress or Gateway that targets a Service.
-- Per-color Infinispan isolation on a shared DB (`KC_CACHE_EMBEDDED_CLUSTER_NAME={{ .Release.Name }}`,
-  `helm/values-common.yaml:51-52`), verified with two live views of 3 (wl:slice1-platform).
-- The two-mechanism split. Keycloak supports mixed versions on one DB only within the same major.minor: "Deploying
-  different Keycloak major/minor versions on each of the sites is not supported"
-  ([multi-cluster v2 upgrades](https://www.keycloak.org/nightly/high-availability/multi-cluster-v2/upgrades)). So
-  patch = shared DB, minor/major = own DB. This holds in any environment.
-- The k6 gate (`scripts/gate.sh`, 19 fixture tests) as a release-qualification harness for staging.
-- The edge hardening findings: issuer forgery via X-Forwarded-Host, Host case and trailing dot, and RFC 7239
-  `Forwarded` (wl:security-pipelines, wl:security-fixes). The findings transfer even where the fix (an nginx
-  snippet) does not.
-- The security pipeline as a nightly regression job (`jenkins/jobs.groovy:20-58`, `security/README.md`).
-
-**What is demo-only**
 - KinD on one host (zones are labels on one machine, `kind/cluster.yaml`), `kind load` images, no registry.
 - Jenkins in compose, running as root with `docker.sock` (`compose.yaml:17-37`).
 - A demo CA and random k8s Secrets (`scripts/certs.sh`, `scripts/lib/kc.sh:72-76`).
-- The Postgres baseline used CNPG with 2 Gi volumes and no backups; the Oracle branch uses one 20 Gi PVC and no
-  backups (`k8s/oracle/oracle.yaml.tpl`).
+- CNPG with 2 Gi volumes and no backups; Oracle: one 20 Gi PVC and no backups (`oracle/oracle.yaml.tpl`).
 - The replay source: `kubectl logs` of pod stdout (`scripts/replay.sh:16-20`).
 
 **Biggest gaps (ranked)**

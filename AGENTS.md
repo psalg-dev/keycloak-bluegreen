@@ -24,12 +24,12 @@ docker compose run --rm launcher
 docker compose up -d jenkins
 ```
 
-`up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, one Oracle instance
-(6 GiB, schema `kc1`), the legacy IdP, the two test apps and a first blue Keycloak. On a 16 GB machine use
-`PROFILE=laptop` on every command, plus `ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim ORACLE_MEMORY=4Gi` on the
-bring-up: the laptop profile is sized for gvenzl Free (~13 GiB Docker VM, an estimate) and preflight refuses 19.3 there. For the
-smaller gvenzl Free image instead of the default 19.3, see `docs/oracle.md` (`ORACLE_IMAGE`,
-`ORACLE_PULL_SECRET_FILE`).
+`up.sh` runs preflight, then creates the cluster (1 control plane + 3 workers), ingress-nginx, the database platform,
+the legacy IdP, the two test apps and a first blue Keycloak. Engine: Postgres/CNPG by default (`pg-1`);
+`DB_ENGINE=oracle` on every launcher command (Jenkins: build parameter) for one Oracle instance (6 GiB, schema `kc1`),
+see `oracle/README.md`. One cluster = one engine, recorded on the cluster; to change it, `scripts/down.sh` first. On a
+16 GB machine use `PROFILE=laptop` on every command; with Oracle add `ORACLE_IMAGE=gvenzl/oracle-free:23.26.3-slim
+ORACLE_MEMORY=4Gi` on the bring-up (preflight refuses 19.3 there).
 
 Done when `docker compose run --rm launcher bash scripts/check-cluster.sh blue` passes and http://localhost:8081
 answers (user `admin`, password in `out/jenkins-admin-password`).
@@ -71,11 +71,11 @@ Done when every script prints `ok`/`passed` and shellcheck is silent. `test-gate
 
 ## Rules that keep the demo honest
 
-- `PROFILE` must match the cluster it runs against; `up.sh` refuses a mismatch instead of corrupting state.
+- `PROFILE` and `DB_ENGINE` must match the cluster it runs against; `up.sh` refuses a mismatch instead of corrupting state.
 - The kind kubeconfig lives in the compose `kube` volume (shared by the launcher and Jenkins), not in your host
   `~/.kube`: reach the cluster with `docker exec kc-bluegreen-jenkins-1 kubectl ...` or a launcher command.
 - Never run `kc.sh` subcommands (or `update-compatibility`) inside a live Keycloak pod: it re-augments the pod's build.
 - `out/` is gitignored (secrets, certs, runs). Commit with explicit paths.
-- Where things are defined: README.md (run and results), docs/oracle.md (Oracle route and limits), PLAN.md (historical
-  design and known limits), docs/failure-modes.md (every mode, window and bound), load/RATE.md (load baseline),
+- Where things are defined: README.md (run and results), oracle/README.md (Oracle route and limits), PLAN.md (design
+  and known limits), docs/failure-modes.md (every mode, window and bound), load/RATE.md (load baseline),
   docs/production-readiness.md (what production needs).

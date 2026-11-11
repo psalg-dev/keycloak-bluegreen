@@ -1,7 +1,9 @@
-# Oracle 19.3 instead of Postgres: route, tools, zero-downtime analysis
+# Oracle 19.3 as the database engine: route, tools, zero-downtime analysis
 
-Branch `oracle-19c`. This replaces the demo's database engine; the Keycloak blue/green
-contract, load, gate and report stay. The short version:
+`DB_ENGINE=oracle` (launcher environment or Jenkins build parameter) runs the same demo on Oracle instead of
+Postgres. Everything Oracle-specific is in this directory: `db.sh` (the engine functions `scripts/lib/kc.sh` sources),
+`oracle.yaml.tpl` + `bootstrap.sh` (the instance), `values*.yaml` (Helm overlays), `check-db.sh`. Results land in
+`out/oracle/<case>/`. The Keycloak blue/green contract, load, gate and report are shared. The short version:
 
 - **The default is Oracle 19.3 EE** from the Docker Hub image
   `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official 19.3
@@ -21,16 +23,16 @@ contract, load, gate and report stay. The short version:
 
 ## What changed
 
-| Postgres / CNPG (main) | Oracle (`oracle-19c`) |
+| Postgres / CNPG (default) | Oracle (`DB_ENGINE=oracle`) |
 |---|---|
-| CloudNativePG operator + `pg-1`/`pg-2` clusters | one Oracle StatefulSet (`k8s/oracle/oracle.yaml.tpl`) with a PVC |
+| CloudNativePG operator + `pg-1`/`pg-2` clusters | one Oracle StatefulSet (`oracle/oracle.yaml.tpl`) with a PVC |
 | one database per color (minor/major) | one schema per color in `FREEPDB1`: `KC1`, `KC2` |
 | `psql_db` via `psql` | `sql_admin`/`sql_db` via SQL*Plus as SYSDBA (no password in argv) |
 | CNPG replica cluster + promote | Oracle Data Pump export at `FLASHBACK_SCN`, import with `REMAP_SCHEMA` |
 | LSN copy point (`pg_current_wal_lsn`) | SCN copy point (`DBMS_FLASHBACK.GET_SYSTEM_CHANGE_NUMBER`) |
 | `--db=postgres` image | `--db=oracle` image + `ojdbc17` and `orai18n` in `providers/` |
 | `databasechangelog` count via psql | `DATABASECHANGELOG` count via SQL*Plus |
-| CNPG metrics (not collected) | `scripts/check-db.sh` + SCN events; AWR/Statspack available for production |
+| CNPG metrics (not collected) | `oracle/check-db.sh` + SCN events; AWR/Statspack available for production |
 
 The Keycloak image is still the official image re-laid into the Bitnami layout. The only
 image change is the Oracle driver and `--db=oracle`:
@@ -118,9 +120,9 @@ Once on Oracle, the blue/green mechanisms in this branch apply to Keycloak upgra
 
 ## Tools and instrumentation
 
-- `scripts/lib/kc.sh`: `sql_admin`, `sql_db`, `sql_scalar`, `create_db`, `delete_dbs`,
-  `oracle_ready`, Oracle-aware `deploy_color`.
-- `scripts/check-db.sh <db>`: the schema has tables and `DATABASECHANGELOG` rows; called by
+- `oracle/db.sh`: `sql_admin`, `sql_db`, `sql_scalar`, `create_db`, `delete_dbs`, `oracle_ready`,
+  `db_copy_cut` (SCN, Data Pump, row-count check), `db_helm_args`.
+- `oracle/check-db.sh <db>`: the schema has tables and `DATABASECHANGELOG` rows; called by
   `deploy_color` after Helm reports Ready. "Pod Ready" is not proof Keycloak used the schema.
 - `scripts/switch-lossy.sh`: SCN copy point, Data Pump export/import, `copy_ready` and
   `promoted` events carry `scn`; `copy_point` carries `scn`.
@@ -274,7 +276,7 @@ RMAN/PITR, and a refreshable-PDB path. The `helm template` render was checked fo
 - **Not measured on Oracle**: memory (both runs were on a 47 GiB Docker VM without sampling; the preflight
   thresholds are estimates) and the row-count copy check (added after the runs). The README's Results table is the
   19.3 run.
-- **Undo retention** is set in CDB$ROOT and again inside the PDB (`k8s/oracle/bootstrap.sh`): from RU 19.9 a PDB
+- **Undo retention** is set in CDB$ROOT and again inside the PDB (`oracle/bootstrap.sh`): from RU 19.9 a PDB
   does not inherit it. The bootstrap runs once, at database creation; an existing cluster keeps its old setting.
 - **Optimizer statistics**: the import excludes them (19c fails on three function-based index statistics), so the
   copy runs on dynamic sampling until Oracle's nightly job; a production copy should run

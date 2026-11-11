@@ -1,12 +1,9 @@
 # Plan: zero-downtime blue-green Keycloak (3 pods/color) on KinD, Postgres, keycloak-config-cli, driven by Jenkins, launched by `docker compose up`
 
-> **Branch `oracle-19c`:** the engine is Oracle. The Oracle delta (schemas instead of CNPG
-> clusters, Data Pump at an SCN instead of a physical replica, `--db=oracle` + `ojdbc17`)
-> is in [docs/oracle.md](docs/oracle.md). The Postgres/CNPG design below is the historical
-> baseline and stays as the record of why the mechanisms are shaped this way; where it
-> names `pg-*`, CNPG or `psql`, read "Oracle schema", "Oracle instance" and SQL*Plus for this
-> branch. The known limits that still apply are the app-level lossy ones; the Oracle-specific
-> limits (single instance, Data Pump copy, 19.3 and the gvenzl Free alternative) are in docs/oracle.md.
+> **Two engines.** This plan is written for the default engine, Postgres/CNPG. `DB_ENGINE=oracle` swaps only the
+> database layer (schemas instead of CNPG clusters, Data Pump at an SCN instead of a physical replica, `--db=oracle` +
+> `ojdbc17`): [oracle/README.md](oracle/README.md), including the Oracle-specific limits. The engine interface is
+> `scripts/lib/db-postgres.sh` / `oracle/db.sh`.
 
 Research and decision trail: `C:\dev\_worklogs\keycloak-bluegreen\2026-11-02-research-design-questions.md`.
 
