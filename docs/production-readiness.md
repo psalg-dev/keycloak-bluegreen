@@ -192,20 +192,20 @@ revocation on green (two clients), one control; 15 of 15 checks (refresh result 
 and after the rollback) as expected.
 
 Evidence (Oracle 19.3, builds #26-#27 on `6eda4a5`): `minor-rollback` and `major` gates PASS; #26 ran with the same
-planted sessions, 15 of 15 checks as expected. Postgres `minor` #25 (`4eb2fc3`) re-ran after the service-account and
+planted sessions, 15 of 15 checks as expected. Build #28 (`d2a42a3`, the faster pass below): `minor-rollback` PASS,
+15 of 15 again. Postgres `minor` #25 (`4eb2fc3`) re-ran after the service-account and
 `enabled`/`emailVerified` changes: PASS, 38 users replayed.
 
 What stays open:
-- **Slower first pass on Oracle**: 37 s for 58 new users in #26 (the log replay took 14 s in the earlier Oracle
-  `minor-rollback`); each of the six reads is a `sqlplus` session through `kubectl exec`. It sits in the lossy
-  window, which was 180-187 s in #26/#27 against 124-142 s before; the replay explains about 23 s of that, the rest
-  (promote, migration, config) was not investigated. One query per side instead of three would cut it.
+- **Cost of a pass** (measured, builds #26 and #28, Oracle `minor-rollback`): first written with three reads per
+  database and one import per user, a pass took 37 s for 58 new users (six `sqlplus` sessions at 1.1 s, and every
+  admin call re-fetching its token), and the lossy window grew to 180-187 s. Now one tagged read per database, in
+  parallel, one `partialImport` per 200 users and one token per color: 5 s for 53 users and 5 sessions forward, 5 s for
+  65 users on the rollback. Lossy window 128 s, lossy rollback 41 s: back to what the log replay had (124-142 s, 40 s).
+  Not re-timed on Postgres with this version.
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
-- **Cost per new user**: 4 admin calls on blue + 1 import on green. The first pass took 15-21 s for 29-44 new users
-  (console timestamps, builds #21-#23), the same order as the log replay (15 s for 34); it sits in the lossy window.
-  Batch it if a window carries hundreds. The lossy rollback took 56 s against 39 s before: not investigated.
 - **The listener** (`ReplayEventListener`) still ships and still prints; nothing reads it. Remove it, or keep it as an audit trail.
 - k6 barely exercises the session diff (3-4 sessions forward, 0 on the rollback per run): the planted-session check
   was a one-off manual script (not in the repo), not part of the gate.

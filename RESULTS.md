@@ -61,8 +61,9 @@ The numbers above were measured with the replay reading the event listener's log
 `minor`, `major`, `minor-rollback` PASS, plus a run with planted sessions (logout and token revocation on each
 color: 15 of 15 checks). Lossy window 115-135 s; the first replay pass took 15-21 s for 29-44 new users, the same
 order as the log replay (15 s for 34). The lossy rollback took 56 s (39 s before); why was not investigated.
-Oracle 19.3 builds #26-#27: `minor-rollback` (with the planted sessions, 15 of 15) and `major` PASS; lossy window
-180-187 s there (124-142 s before), about 23 s of it the slower first replay pass. Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
+Oracle 19.3 builds #26-#28: `minor-rollback` (with the planted sessions, 15 of 15, twice) and `major` PASS. After
+cutting the replay's round trips (#28): lossy window 128 s, lossy rollback 41 s, a replay pass 5 s for 53 users.
+Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
 
 ## Caveats
 
