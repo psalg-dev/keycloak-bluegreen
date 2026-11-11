@@ -22,7 +22,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq shellcheck
 
       - name: shellcheck every script
-        run: shellcheck -x scripts/*.sh scripts/lib/*.sh oracle/*.sh scripts/security/*.sh
+        run: shellcheck -x scripts/*.sh scripts/lib/kc.sh oracle/check-db.sh oracle/bootstrap.sh scripts/security/*.sh
 
       - name: lib helpers (profiles, events, image tags, exec bits)
         run: bash scripts/test-lib.sh

@@ -144,64 +144,100 @@ profile: the 3-zone spread, a pod kill that leaves 2 serving pods per color (her
 
 ## Results
 
-**Oracle 19.3 run, 2026-11-04:** Jenkins builds **#1** (`patch`), **#3** (`minor`), **#4** (`major`), **#5**
-(`patch-rollback`), **#6** (`minor-rollback`) on the `oracle-19c` branch, default profile, one KinD cluster, five cases
-back to back. Every gate PASSes. The database is Oracle 19.3 EE from the Docker Hub image
-`mohammedesafi/oracle-database:19.3.0-ee` (a community build of Oracle's official 19.3 Dockerfiles, OTN Developer
-License; not an Oracle-supported production image), with `ORACLE_SID=ORCLCDB`, `ORACLE_PDB=FREEPDB1`,
-`ORACLE_MEMORY=6Gi`. The full report is `out/oracle19c-run/report.html` (gitignored; Jenkins archives the same file).
-The gvenzl Oracle Free image is the fast alternative and also passed all five cases (report
-`out/oracle-run/report.html`).
+Both engines measured on **2026-11-11**, default profile, one machine, one KinD cluster per engine, five cases back to
+back through Jenkins, branch `both-engines`. **All ten gates PASS; 0 5xx / network errors in every case.** One run per
+case: expect run-to-run spread. The full reports are `out/report.html` and `out/oracle/report.html` (gitignored;
+Jenkins archives them).
+
+Three defects surfaced during these runs and were fixed before the passing builds (details in the commits):
+the new Postgres caught-up check compared `true` with `t` (first Postgres `minor`/`major`/`minor-rollback` died before
+the promote); the rotating k6 sessions were in phase and could all rotate at the switch, leaving `window_exercised`
+nothing to judge (one Oracle `minor-rollback` gate FAIL); and a rollback's reverse replay died on the log line of a
+duplicate user the forward replay had already repaired (one Oracle `minor-rollback`). The last one is a real bug in
+the mechanism, engine-independent, and needs a post-flip duplicate followed by a rollback to show.
+
+### Postgres (CloudNativePG)
+
+Builds **#1** (`patch`), **#4** (`patch-rollback`) on `bf7e313`; **#6** (`minor`), **#7** (`major`), **#8**
+(`minor-rollback`) on `df36c1b`.
 
 | | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
 |---|---|---|---|---|---|
-| k6 requests | 14,744 | 15,902 | 14,552 | 21,156 | 14,761 |
+| k6 requests | 14,703 | 15,855 | 28,307 | 39,073 | 24,060 |
 | 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
-| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.27 % (0.60 %) | 0.49 % (0.97 %) | 0.25 % (0.47 %) |
-| users potentially impacted (of users seen) | 4 of 890 (slow only) | 2 of 945 (slow only) | 31 of 871 (3.6 %) | 63 of 1,185 (5.3 %) | 28 of 875 (3.2 %) |
-| lossy window (copy point -> switch) | - | - | 147.5 s | 124.4 s | 153.4 s |
-| sessions lost (born on the old color in the window, not in the copy) | 0 | 0 | 320 (313 users) | 291 (284 users), +377 green-born (364 users) at the rollback | 354 (345 users) |
-| of those, seen lost by k6 = silent re-logins | 0 | 0 | 3 | 6 (+4 green-born, at the rollback) | 5 |
-| logouts / new users replayed | - | - | 20 / 61 | 18 / 49 forward, 19 / 66 back | 22 / 74 |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.17 % (0.45 %) | 0.26 % (0.74 %) | 0.17 % (0.55 %) |
+| users potentially impacted (of users seen) | 1 of 874 (slow only) | 2 of 934 (slow only) | 37 of 1,485 (2.5 %) | 66 of 1,838 (3.6 %) | 26 of 1,288 (2.0 %) |
+| lossy window (copy point -> switch) | - | - | 169.7 s | 128.0 s | 118.9 s |
+| sessions lost (born on the old color in the window) | 0 | 0 | 390 (381 users) | 290 (280 users), +452 green-born (435 users) at the rollback | 278 (269 users) |
+| of those, seen lost by k6 = silent re-logins | 0 | 0 | 6 | 11 (+6 green-born, at the rollback) | 4 |
+| logouts / new users replayed | - | - | 22 / 70 | 19 / 48 forward, 24 / 76 back | 16 / 52 |
 | users repaired (post-flip race) | - | - | 0 | 0 | 0 |
-| resurrection window (switch -> replay done) | - | - | 46.5 s | 40.9 s, rollback 42.4 s | 47.4 s |
-| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.1 s | 48.5 s | - | - | - |
-| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 41.1 s (reverse replay + purge) | - |
-| p95 network latency pre / cutover / post | 75 / 79 / 66 ms | 92 / 90 / 80 ms | 82 / 75 / 71 ms | 96 / 87 / 81 ms | 77 / 71 / 76 ms |
-| step classes with cutover p95 > 2x | none | introspection 3.48x | none | none | none |
+| resurrection window (switch -> replay done) | - | - | 62.1 s | 48.3 s, rollback 56.6 s | 49.7 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.2 s | 48.9 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 65.5 s (reverse replay + purge) | - |
+| p95 network latency pre / cutover / post | 62 / 65 / 59 ms | 87 / 92 / 88 ms | 118 / 126 / 89 ms | 116 / 115 / 104 ms | 114 / 108 / 103 ms |
+| step classes with cutover p95 >= 2x | introspection 2.0x | none | none | introspection 2.64x | none |
 | schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
+| replica at the promote vs copy LSN | - | - | 0/B2A8378 >= 0/B28B7A0 | 0/AD935B8 >= 0/AD92B70 | 0/9491578 >= 0/94902D8 |
 
-Reading it:
+Memory, all five cases (docker stats every 15 s): **12.65 GiB** peak for the KinD nodes, **14.03 GiB** with Jenkins
+(rollback phase of `minor-rollback`: both colors and both Postgres clusters up).
 
-- **Users first**: 31 of 871 people in `minor`, 63 of 1,185 in `minor-rollback` and 28 of 875 in `major` were
-  potentially impacted - they hit at least one error line (a lost session's `invalid_grant`, a straddling login, a
-  channel logout for a session Keycloak no longer had) or a request over 1 s. The shared cases: four slow-only users
-  in `patch`, two in `patch-rollback`, no errors. The report counts each user once; the definition is in
+The lossy cases carry more requests than the shared ones because the Keycloak image was loaded into the fresh cluster
+inside the switch stage, before the copy point (about six minutes of extra load, none of it in the lossy window).
+
+### Oracle 19.3
+
+Builds **#9** (`patch`), **#10** (`minor`), **#11** (`major`), **#12** (`patch-rollback`) on `df36c1b`; **#15**
+(`minor-rollback`) on `f505a83`. Image `mohammedesafi/oracle-database:19.3.0-ee` (community build of Oracle's official
+19.3 Dockerfiles, OTN Developer License; not an Oracle-supported production image), `ORACLE_MEMORY=6Gi`. The gvenzl
+Free route was not re-run on this tree (last passed 2026-11-05 on the `oracle-19c` branch).
+
+| | `patch` | `patch-rollback` | `minor` | `minor-rollback` | `major` |
+|---|---|---|---|---|---|
+| k6 requests | 15,260 | 14,803 | 13,795 | 21,441 | 14,152 |
+| 5xx / network errors | 0 | 0 | 0 | 0 | 0 |
+| error rate, whole run (cutover window) | 0 % (0 %) | 0 % (0 %) | 0.30 % (0.68 %) | 0.45 % (0.91 %) | 0.46 % (0.73 %) |
+| users potentially impacted (of users seen) | 5 of 905 (slow only) | 4 of 892 (slow only) | 35 of 810 (4.3 %) | 57 of 1,180 (4.8 %) | 31 of 857 (3.6 %) |
+| lossy window (copy point -> switch) | - | - | 129.1 s | 123.9 s | 141.7 s |
+| sessions lost (born on the old color in the window) | 0 | 0 | 291 (278 users) | 286 (276 users), +360 green-born (351 users) at the rollback | 315 (305 users) |
+| of those, seen lost by k6 = silent re-logins | 0 | 0 | 8 | 6 (+3 green-born, at the rollback) | 3 |
+| logouts / new users replayed | - | - | 18 / 69 | 18 / 54 forward, 16 / 65 back | 21 / 71 |
+| users repaired (post-flip race) | - | - | 3 | 1 (on the rollback) | 0 |
+| resurrection window (switch -> replay done) | - | - | 44.9 s | 41.5 s, rollback 48.6 s | 44.2 s |
+| pod kill -> recovered (3 -> 2 -> 3 pods) | 43.8 s | 43.3 s | - | - | - |
+| rollback (start -> traffic on the old color) | - | 0 s (Service flip) | - | 40.4 s (reverse replay + purge) | - |
+| p95 network latency pre / cutover / post | 85 / 70 / 62 ms | 77 / 81 / 74 ms | 73 / 67 / 65 ms | 101 / 89 / 93 ms | 67 / 63 / 68 ms |
+| step classes with cutover p95 >= 2x | introspection 32.7x, app call 7.5x, refresh 4.6x | introspection 5.6x, app call 3.2x | none | none | none |
+| schema changesets | - | - | 211 -> 238 | 211 -> 238 | 134 -> 238 |
+| copy rows vs source AS OF the copy SCN | - | - | 4,317 = 4,317 | 4,322 = 4,322 | 4,306 = 4,306 |
+
+Memory, all five cases plus two failed `minor-rollback` attempts: **13.19 GiB** peak for the KinD nodes, **14.71 GiB**
+with Jenkins. The Oracle pod's working set peaked at 2.5 GiB of its 6 GiB limit.
+
+### Reading it
+
+- **Sessions lost is the exposure, not what k6 saw.** Every session created on the old color between the copy point
+  and the flip is missing on the new one: 278-390 sessions per lossy case on Postgres, 286-315 on Oracle, roughly a
+  quarter to a third of the users seen in a run. Each of them re-logins (silently, through legacy SSO) the next time
+  they return. k6 comes back to about ten sessions (its refresh VUs), so it sees 3-11 of them die; those are the
+  sample the gate judges. A rollback additionally drops every session born on the new color (360-452).
+- **Users potentially impacted** (2.0-4.8 % in the lossy cases) counts people who hit at least one error line (a lost
+  session's `invalid_grant`, a login straddling the flip, a channel logout for a session Keycloak no longer had) or a
+  request over 1 s. The shared cases: slow-only users, no errors. Definition:
   [docs/failure-modes.md](docs/failure-modes.md).
-- **"Impacted" is what k6 saw, not the exposure.** k6 comes back to about ten sessions (its refresh VUs); the 2
-  logins/s of the `login` scenario log in and never refresh. Every session created on blue between the copy point
-  and the flip is missing on green: 320 sessions / 313 users in `minor`, 354 / 345 in `major`, 291 / 284 in
-  `minor-rollback` plus 377 / 364 created on green and dropped by the rollback. That is roughly a third of the users
-  seen in a run, and each of them re-logins (silently, through legacy SSO) the next time they return (k6 itself logged a few of
-  them out again: 14 logout-scenario and 4 app sessions of the 320 in `minor`). The 3-6
-  "seen lost" are the sample the gate judges, recomputed from the archived k6 lines with the current gate
-  (`sessions_lost`, `sessions_lost_observed`, `green_sessions_born`).
-- The errors in the lossy cases are the trade the mechanism makes, all inside its bound: logins whose hops straddle
-  the flip (started on blue, finished on green; the next attempt goes through legacy SSO), refreshes of sessions born
-  in the lossy window (`invalid_grant`, then a silent re-login), and the apps' back-/front-channel logouts for those
-  sessions (Keycloak on green never knew them). No session born before the copy point was lost, no logged-out session
-  came back after the replay, and no duplicate user needed repair in this run.
-- The shared cases (same Oracle schema) lose nothing. `patch-rollback` has one class over 2x, introspection 3.48x,
-  inside a cutover window that also holds a pod kill; `patch` has none. One run per case on one machine: expect
-  run-to-run spread of that size.
+- The errors in the lossy cases are the trade the mechanism makes, all inside its bound. No session born before the
+  copy point was lost and no logged-out session came back after the replay, on either engine.
+- **The copy is now proven per run** (`db_copy_matches_source`): Postgres by the replica's replay LSN at the promote,
+  Oracle by row counts against the source `AS OF` the copy SCN. Before this run the rule had never passed live.
+- **Engines compared**: the lossy window is the same order on both (119-170 s Postgres, 124-142 s Oracle); it is
+  dominated by green's start and migration, not by the copy. The Oracle rollback was faster here (40 s vs 65 s), within
+  what one run can show.
+- **Oracle shared cases, latency during the pod kill**: `patch` shows introspection at 32.7x its pre-cutover p95 and
+  `patch-rollback` at 5.6x, with no errors and the overall p95 unchanged. The Postgres runs show at most 2.6x. One run
+  each; the cause was not investigated.
 - Admin and account console answer 503 for the whole cutover window in the lossy cases (copy point -> window end,
-  ~125-155 s). Login, token, refresh, logout, discovery and JWKS never stop.
-- The Data Pump copy: every green schema ends at the target Keycloak changeset count (238). These runs predate the
-  row-count check (`db_copy_matches_source`: source AS OF the copy SCN vs the copy); their events only restate the
-  SCN, so that rule has not passed on a live run yet. The Oracle instance is one 6 GiB pod; no Oracle memory sample was
-  taken in this five-case run.
-
-The full numbers, per failure mode and per step class, are in the report (one tab per case).
+  about 170-240 s). Login, token, refresh, logout, discovery and JWKS never stop.
 
 ## More
 

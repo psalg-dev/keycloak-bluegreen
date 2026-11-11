@@ -273,9 +273,9 @@ RMAN/PITR, and a refreshable-PDB path. The `helm template` render was checked fo
   7-Zip extraction plus the 1 GiB memory-backed `/dev/shm` was OOMKilled at 2 and 3 GiB.
 - **Laptop profile**: still 2 workers/2 pods, sized for gvenzl Free (13 GiB Docker VM). The 19.3 image does not fit
   that profile; use the default profile on a machine with ~16 GB+ for Docker.
-- **Not measured on Oracle**: memory (both runs were on a 47 GiB Docker VM without sampling; the preflight
-  thresholds are estimates) and the row-count copy check (added after the runs). The README's Results table is the
-  19.3 run.
+- **Measured on 19.3, 2026-11-11** (README Results): all five cases, the row-count copy check passing live, and
+  memory (14.71 GiB peak with Jenkins, default profile). **Not measured**: the laptop profile's memory (its preflight
+  threshold is an estimate) and the gvenzl Free route on the two-engine tree (last passed on the `oracle-19c` branch).
 - **Undo retention** is set in CDB$ROOT and again inside the PDB (`oracle/bootstrap.sh`): from RU 19.9 a PDB
   does not inherit it. The bootstrap runs once, at database creation; an existing cluster keeps its old setting.
 - **Optimizer statistics**: the import excludes them (19c fails on three function-based index statistics), so the

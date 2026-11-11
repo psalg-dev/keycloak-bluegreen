@@ -22,8 +22,8 @@ else
   bad "no Docker daemon: start Docker Desktop (or dockerd) and re-run"
 fi
 
-# 2. Docker VM memory against the profile's peak for this engine (db_mem_need: measured on Postgres, an estimate on
-# Oracle until a sampled run exists), and whatever else the engine needs from the machine (db_preflight).
+# 2. Docker VM memory against the profile's peak for this engine (db_mem_need: measured, except Oracle on the
+# laptop profile, an estimate), and whatever else the engine needs from the machine (db_preflight).
 while IFS= read -r line; do [[ -z $line ]] || bad "$line"; done < <(db_preflight)
 mem=$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)
 need=$(db_mem_need) # GiB

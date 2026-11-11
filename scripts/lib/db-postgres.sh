@@ -23,7 +23,7 @@ db_first() { echo pg-1; }
 db_next() { echo "pg-$((${1#pg-} + 1))"; }
 db_build_opt() { echo "--db=postgres"; }
 db_image_suffix() { :; }
-# Docker VM GiB the profile peaks at, MEASURED (README Results: default 14.8 with Jenkins, laptop 9.1)
+# Docker VM GiB the profile peaks at, MEASURED (default 14.0 with Jenkins on 2026-11-11, 14.8 on 2026-11-03; laptop 9.1)
 db_mem_need() { if [[ $PROFILE == laptop ]]; then echo 9; else echo 15; fi; }
 db_preflight() { :; }
 

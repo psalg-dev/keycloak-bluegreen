@@ -61,15 +61,16 @@ the endpoints); runs without `flipped` use the event alone (`acrossflip` in `scr
 SIGINT, not server behaviour; they are counted ("aborted") and judged by no rule. Logins still in their think time at
 the end of the data (no failed hop, no token, last hop < 30 s before the end) are not judged.
 
-**Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, one Oracle instance in-cluster;
-`PROFILE=laptop`: 2 workers, 2 pods per color, the same one Oracle instance, ~2 logins/s): k6, both
-colors, Oracle and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
+**Limits.** One machine (KinD, 3 worker nodes in Docker, 3 Keycloak pods per color, the database in-cluster;
+`PROFILE=laptop`: 2 workers, 2 pods per color, ~2 logins/s): k6, both
+colors, the database and the legacy IdP compete for the same CPUs, so latency numbers are relative (pre vs cutover), never
 absolute capacity numbers. Synthetic load at a fixed, modest rate (~2 logins/s): rare races need far more traffic to
 show up. One run per case: a count of 0 is "not seen in this run", not a probability; compare rates across runs before
 calling something fixed. No real network between zones, no cloud load balancer: the flip is a Service selector change
-seen by ingress-nginx. Lossy cases passed live on 2026-11-03 (builds #35-#37, `README.md` Results) **on Postgres** and on 2026-11-04 on
-Oracle 19.3 (`README.md` Results). Oracle copy instrumentation: `promoted.src_rows` / `copy_rows` in `events.jsonl`
-(users + sessions, source AS OF the copy SCN vs the copy), checked by the `db_copy_matches_source` gate rule. Report tabs built from generated data are marked SYNTHETIC.
+seen by ingress-nginx. All five cases passed live on both engines on 2026-11-11
+(`README.md` Results). Copy instrumentation on the `promoted` event in `events.jsonl`, checked by the
+`db_copy_matches_source` gate rule: Postgres `replay_lsn` / `caught_up` (replica vs the copy LSN, just before the
+promote), Oracle `src_rows` / `copy_rows` (users + sessions, source AS OF the copy SCN vs the copy). Report tabs built from generated data are marked SYNTHETIC.
 
 ## Reading a mode
 

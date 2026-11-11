@@ -33,7 +33,7 @@ db_first() { echo kc1; }
 db_next() { echo "kc$((${1#kc} + 1))"; }
 db_build_opt() { echo "--db=oracle"; }
 db_image_suffix() { echo "-ora"; }
-# ESTIMATES, not measurements, until an Oracle run with scripts/mem-sample.sh says otherwise (README Results).
+# default: measured 14.71 GiB peak with Jenkins (19.3, five cases, 2026-11-11, README Results); laptop: an ESTIMATE.
 db_mem_need() { if [[ $PROFILE == laptop ]]; then echo 13; else echo 15; fi; }
 # db_preflight: prints one line per problem this engine has with the machine/profile (preflight.sh fails on any)
 db_preflight() {
