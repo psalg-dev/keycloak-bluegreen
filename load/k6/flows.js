@@ -203,7 +203,13 @@ export function login() {
 // Even VUs rotate to a brand-new session every ROTATE_SECONDS (see above).
 export function refresh() {
   if (held && exec.vu.idInTest % 2 === 0 && Date.now() - held.since > ROTATE_SECONDS * 1000) held = null;
-  if (!held) { held = newSession(); held.since = Date.now(); }
+  // Random phase for the first session: the rotating VUs start together, so in phase they all rotated within 6 s of
+  // each other, and when that fell on the switch no window-born session lived to refresh on green (window_exercised
+  // FAIL, Oracle minor-rollback 2026-11-11).
+  if (!held) {
+    held = newSession();
+    held.since = Date.now() - (exec.vu.iterationInScenario === 0 ? Math.random() * ROTATE_SECONDS * 1000 : 0);
+  }
   if (!held.rt && !doLogin(held, held.lost ? 'relogin' : 'refresh')) { sleep(PROBE_EVERY); return; }
   sleep(PROBE_EVERY);
   const t = token(held, 'refresh', 'refresh', { grant_type: 'refresh_token', refresh_token: held.rt });
