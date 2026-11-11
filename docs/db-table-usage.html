@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keycloak DB table usage</title>
+<style>
+:root { --bg:#fcfcfb; --card:#f1efe8; --ink:#0b0b0b; --ink2:#52514e; --ink3:#898781; --line:rgba(11,11,11,.12); --bar:#b4b2a9; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#1a1a19; --card:#2c2c2a; --ink:#f0efec; --ink2:#c3c2b7; --ink3:#898781; --line:rgba(255,255,255,.12); --bar:#5f5e5a; }
+}
+body { background:var(--bg); color:var(--ink); font:14px/1.5 system-ui,sans-serif; max-width:760px; margin:0 auto; padding:16px; }
+h1 { font-size:20px; font-weight:500; margin:0 0 4px; }
+p, li { color:var(--ink2); font-size:13px; }
+button { font:inherit; color:inherit; background:transparent; border:1px solid var(--line); border-radius:8px; padding:6px 12px; cursor:pointer; }
+button[aria-pressed=true] { background:var(--card); border-color:var(--ink3); }
+#cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(105px,1fr)); gap:8px; margin:12px 0; }
+#cards button { text-align:left; padding:8px 10px; background:var(--card); border-color:transparent; }
+#cards button[aria-pressed=true] { border-color:var(--ink); }
+#cards.filtered button[aria-pressed=false] { opacity:.45; }
+.sq { display:inline-block; flex:none; width:9px; height:9px; border-radius:2px; margin-right:5px; }
+.row { display:grid; grid-template-columns:210px minmax(0,1fr) 110px; gap:10px; align-items:center; padding:4px 0; border-bottom:1px solid var(--line); }
+.name { font:12px ui-monospace,Consolas,monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.b { height:5px; border-radius:0 3px 3px 0; }
+.num { font-size:11px; color:var(--ink2); text-align:right; font-variant-numeric:tabular-nums; line-height:1.3; }
+.legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--ink2); margin-bottom:6px; }
+</style>
+</head>
+<body>
+<h1>Keycloak DB table usage: what a blue/green copy has to carry</h1>
+<p>Reads and writes per table, from <code>pg_stat_user_tables</code> on the demo's two Postgres clusters
+(2026-11-11 21:05 UTC, default profile, k6 load). Click a category to filter the tables.</p>
+
+<div style="display:flex;gap:8px;flex-wrap:wrap">
+  <button id="b1">pg-2: traffic only</button>
+  <button id="b0">pg-1: install, seed and load</button>
+</div>
+<div id="cards"></div>
+<div class="legend">
+  <span><span class="sq" style="width:18px;height:5px;background:var(--bar)"></span>reads (table + index scans)</span>
+  <span><span class="sq" style="width:18px;height:5px;background:var(--ink)"></span>writes (rows inserted + updated + deleted), in category color</span>
+  <span>square-root scale</span>
+</div>
+<div id="rows"></div>
+
+<h1 style="margin-top:24px">How to read it</h1>
+<ul>
+  <li><b>pg-1</b> (blue, Keycloak 26.7.5): counters since the database was created, so schema install, config-cli,
+    user seeding and load. Writes are skewed by the seeding.</li>
+  <li><b>pg-2</b> (green's database, Keycloak 26.8.1): counters since the copy, so mostly traffic, plus green's schema
+    upgrade (27 changelog rows). Closer to a steady state. That the copy starts the counters at zero is assumed, not checked.</li>
+  <li><b>Reads</b> are scan counts, not rows. Keycloak caches realms, clients and users in Infinispan, so config reads
+    are understated.</li>
+  <li><b>Ephemeral</b> (<code>auth_session</code>, <code>root_auth_session</code>, <code>single_use_object</code>): in-flight
+    logins and one-time codes. Losing them costs a login retry.</li>
+  <li><b>Sessions</b>: Keycloak 26 keeps online sessions in <code>offline_*_session</code> (<code>offline_flag = '0'</code>).
+    Not copied = everyone logs in again.</li>
+  <li><b>Config</b> is redeployable (config-cli, client sync) except <code>component</code>, which holds the realm
+    signing keys: without them every issued token is invalid after the switch.</li>
+  <li><b>Audit</b>: <code>event_entity</code> is empty here (login events are not stored in the DB in this setup);
+    <code>admin_event_entity</code> has about one row per seeded user. Check <code>eventsEnabled</code> in production.</li>
+  <li>Tables with 0 rows but many scans (<code>cluster_event</code>, <code>user_group_membership</code>,
+    <code>revoked_token</code>, <code>broker_link</code>) are polling or per-login lookups of unused features.</li>
+  <li>About 70 more tables are idle at 0 rows (organizations, authorization services, user federation, consents,
+    workflows) and left out. The categories are assigned by hand, not derived from the data.</li>
+  <li>This is a demo load mix (2 logins/s, 60 s access tokens, so many refreshes). Production ratios will differ;
+    the query below gives them.</li>
+</ul>
+<pre style="font-size:12px;overflow:auto;color:var(--ink2)">select relname, n_live_tup, coalesce(seq_scan,0)+coalesce(idx_scan,0) as scans,
+       n_tup_ins + n_tup_upd + n_tup_del as writes
+from pg_stat_user_tables where schemaname = 'public' order by 4 desc, 3 desc;</pre>
+
+<script>
+// [label, color, verdict]
+const C = { id:['Identity','#2a78d6','migrate'], se:['Sessions','#1baf7a','migrate or re-login'],
+  cf:['Config','#6250d6','redeploy or migrate'], ep:['Ephemeral','#eb6834','skip'],
+  au:['Audit','#eda100','skip'], bk:['Cluster and schema','#898781','skip'] };
+// [table, category, pg-1 scans, pg-1 writes, pg-2 scans, pg-2 writes]
+const D = [
+['user_entity','id',36346,8778,4894,266],
+['auth_session','ep',20807,11095,5568,2935],
+['root_auth_session','ep',15290,4965,4190,1220],
+['cluster_event','bk',12261,0,2998,0],
+['offline_user_session','se',11625,3072,3944,1528],
+['offline_client_session','se',9868,2988,2676,751],
+['user_attribute','id',6443,4277,2052,105],
+['single_use_object','ep',4759,2798,1237,738],
+['user_role_mapping','id',3923,281,2036,105],
+['user_group_membership','id',3697,0,1216,0],
+['federated_identity','id',3313,4836,1102,235],
+['identity_provider_mapper','cf',2836,2,745,0],
+['idp_mapper_config','cf',2203,6,570,0],
+['credential','id',1534,1,482,0],
+['user_required_action','id',1527,0,482,0],
+['revoked_token','ep',1211,0,402,0],
+['broker_link','id',1164,0,411,0],
+['jgroups_ping','bk',1136,263,378,90],
+['realm','cf',865,27,35,0],
+['keycloak_role','cf',662,180,282,0],
+['login_failure','ep',624,0,183,0],
+['protocol_mapper','cf',606,80,48,0],
+['client_scope_client','cf',394,232,58,0],
+['client_scope','cf',369,62,125,0],
+['client','cf',367,45,175,0],
+['component (realm keys)','cf',141,30,8,0],
+['other config, 20 tables','cf',2333,1260,696,0],
+['admin_event_entity','au',3,4391,0,53],
+['event_entity','au',5,0,0,0],
+['databasechangelog','bk',24,211,27,27]];
+let db = 1, cat = null;
+const f = n => n.toLocaleString('en-US'), $ = id => document.getElementById(id);
+function draw() {
+  const si = db ? 4 : 2, wi = si + 1, mx = Math.max(...D.map(d => Math.max(d[si], d[wi])));
+  const tot = {}; let all = 0;
+  D.forEach(d => { tot[d[1]] = (tot[d[1]] || 0) + d[wi]; all += d[wi]; });
+  $('cards').className = cat ? 'filtered' : '';
+  $('cards').innerHTML = Object.keys(C).map(k =>
+    `<button data-k="${k}" aria-pressed="${cat === k}"><div style="font-size:12px;color:var(--ink2)"><span class="sq" style="background:${C[k][1]}"></span>${C[k][0]}</div>` +
+    `<div style="font-size:20px;font-weight:500">${Math.round(100 * (tot[k] || 0) / all)}%</div>` +
+    `<div style="font-size:11px;color:var(--ink3)">of writes · ${C[k][2]}</div></button>`).join('');
+  const w = v => v ? Math.max(0.6, Math.sqrt(v / mx) * 100) : 0;
+  $('rows').innerHTML = D.filter(d => !cat || d[1] === cat).sort((a, b) => (b[si] + b[wi]) - (a[si] + a[wi])).map(d =>
+    `<div class="row"><div class="name"><span class="sq" style="background:${C[d[1]][1]}"></span>${d[0]}</div>` +
+    `<div><div class="b" style="width:${w(d[si])}%;background:var(--bar);margin-bottom:3px"></div><div class="b" style="width:${w(d[wi])}%;background:${C[d[1]][1]}"></div></div>` +
+    `<div class="num">${f(d[si])} r<br>${f(d[wi])} w</div></div>`).join('');
+  $('b0').setAttribute('aria-pressed', db === 0); $('b1').setAttribute('aria-pressed', db === 1);
+}
+$('cards').onclick = e => { const b = e.target.closest('button'); if (b) { cat = cat === b.dataset.k ? null : b.dataset.k; draw(); } };
+$('b0').onclick = () => { db = 0; draw(); };
+$('b1').onclick = () => { db = 1; draw(); };
+draw();
+</script>
+</body>
+</html>

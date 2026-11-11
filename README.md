@@ -250,6 +250,8 @@ with Jenkins. The Oracle pod's working set peaked at 2.5 GiB of its 6 GiB limit.
 - [PLAN.md](PLAN.md): design, decisions and the **known limits** (written for Postgres; oracle/README.md is
   the Oracle delta).
 - [docs/production-readiness.md](docs/production-readiness.md): what it would take to run this in an enterprise.
+- [docs/db-table-usage.html](docs/db-table-usage.html): which Keycloak tables are read and written under load, and
+  which ones a copy has to carry (self-contained page: download and open in a browser).
 - [docs/test-apps.md](docs/test-apps.md): the OIDC test client and resource server (Spring Boot, GraalVM native).
 - Security pipelines: Jenkins jobs **kc-kcwarden** (realm configuration audit) and **kc-security** (probes: TLS,
   tokens, redirect URIs, brute force, DCR, issuer, network policy, trivy, nuclei, ZAP, ...).
