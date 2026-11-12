@@ -54,16 +54,19 @@ What the numbers mean:
   window (about 155-190 s).
 - The window is dominated by green's start and migration, not by the copy.
 
-## Since these runs: replay from the database (branch `replay-db-diff`)
+## Since these runs: replay from the database
 
-The numbers above were measured with the replay reading the event listener's log lines. On the branch
-`replay-db-diff` the replay reads the old color's database instead (no log to lose). Postgres builds #21-#24:
+The numbers above were measured with the replay reading the event listener's log lines. Since `91a9760`
+the replay reads the old color's database instead (no log to lose). Postgres builds #21-#24:
 `minor`, `major`, `minor-rollback` PASS, plus a run with planted sessions (logout and token revocation on each
 color: 15 of 15 checks). Lossy window 115-135 s; the first replay pass took 15-21 s for 29-44 new users, the same
 order as the log replay (15 s for 34). The lossy rollback took 56 s (39 s before); why was not investigated.
 Oracle 19.3 builds #26-#28: `minor-rollback` (with the planted sessions, 15 of 15, twice) and `major` PASS. After
 cutting the replay's round trips (#28): lossy window 128 s, lossy rollback 41 s, a replay pass 5 s for 53 users.
 Postgres #30 with the admin token kept as well: lossy window 105 s, lossy rollback 20 s (39 s before), 15 of 15.
+Oracle #31 on the final code: PASS, 15 of 15, lossy rollback 31 s, but a lossy window of 230 s: the Data Pump export
+took 68 s (about 40 s in other runs) and green's start, migration and config were slower too; the replay pass was
+12 s for 80 users. One run each: on Oracle the window ranged 128-230 s this day.
 Details: [docs/production-readiness.md](docs/production-readiness.md) section 2.3.
 
 ## Caveats

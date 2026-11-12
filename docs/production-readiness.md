@@ -205,8 +205,11 @@ What stays open:
   Postgres `minor-rollback` #30 (`428fe77`, planted sessions 15 of 15): lossy window 105 s, lossy rollback 20 s. The
   rollback's cost had been the purge (64 s for 287 sessions in #29; 22-26 s in earlier runs). Every admin call
   fetched a new token, which is fixed (one per port-forward, renewed after 30 s: 7 s for 223 sessions); why #29 took
-  64 s rather than the usual 22-26 s is not explained. `428fe77` has not run on
-  Oracle (the change is in the shared admin helper, not in engine code).
+  64 s rather than the usual 22-26 s is not explained. Oracle `minor-rollback` #31 on the
+  final code (`91a9760`, planted sessions 15 of 15): replay pass 12 s for 80 users, purge 15 s for 491 sessions, lossy
+  rollback 31 s. Its lossy window was 230 s, and not because of the replay: Data Pump export 68 s (about 40 s in the
+  other runs), green's deploy and migration 76 s, config 34 s (console timestamps). Why that run's copy and start were
+  slow was not investigated; it was the first case on a freshly built cluster.
 - **A late forward run logs live users out.** Once blue is idle its sessions expire on their idle timeout while they
   live on on green; the diff would read that as logouts. `replay.sh` refuses a forward run more than
   `REPLAY_MAX_AGE` (1800 s) after the copy. Set it below the realm's SSO idle timeout.
